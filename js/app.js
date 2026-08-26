@@ -23,6 +23,12 @@
     MODULES.forEach(function (m) { p[m.key] = true; });
     return p;
   }
+  /* Everything except the User Permission group. */
+  function adminPerms() {
+    var p = allPerms();
+    p.userAccess = false; p.roleAccess = false;
+    return p;
+  }
 
   var db = load();
 
@@ -56,6 +62,27 @@
       raw.users = seedUsers();
       raw.seqUser = raw.users.length + 1;
     }
+
+    /* an install written by an older build may not carry these counters */
+    if (!raw.seqRole) raw.seqRole = Math.max.apply(null, raw.roles.map(function (r) { return r.id; })) + 1;
+    if (!raw.seqUser) raw.seqUser = Math.max.apply(null, raw.users.map(function (u) { return u.id; })) + 1;
+
+    var byRole = function (n) {
+      return raw.roles.find(function (r) { return r.name.toLowerCase() === n.toLowerCase(); });
+    };
+    /* A build that ships a new stock role has to add it to installs that were
+       seeded before it existed — matched by name, so it never duplicates. */
+    if (!byRole("Admin")) {
+      raw.roles.push({ id: raw.seqRole++, name: "Admin", createdAt: new Date().toISOString(),
+                       createdBy: "System", perms: adminPerms() });
+    }
+    if (!raw.users.some(function (u) { return u.username.toLowerCase() === "admin"; })) {
+      raw.users.push({ id: raw.seqUser, code: "USR-" + pad(raw.seqUser++, 4),
+                       name: "Admin", username: "Admin", password: "12345678",
+                       roleId: byRole("Admin").id, disabled: false,
+                       createdAt: new Date().toISOString() });
+    }
+
     /* a module added in a later version must not silently stay locked */
     raw.roles.forEach(function (r) {
       if (r.name === "Super Admin") r.perms = allPerms();
@@ -66,20 +93,24 @@
     var now = new Date().toISOString();
     return [
       { id: 1, name: "Super Admin", createdAt: now, createdBy: "System", perms: allPerms() },
-      { id: 2, name: "Store Manager", createdAt: now, createdBy: "System", perms: {
-          variable: true, product: true, barcode: true, customer: true,
-          sales: true, "return": true, repSummary: true, repDate: true,
-          userAccess: false, roleAccess: false } },
-      { id: 3, name: "Sales Operator", createdAt: now, createdBy: "System", perms: {
-          variable: false, product: false, barcode: false, customer: true,
-          sales: true, "return": true, repSummary: false, repDate: false,
-          userAccess: false, roleAccess: false } }
+      { id: 2, name: "Admin", createdAt: now, createdBy: "System", perms: adminPerms() },
+      // { id: 3, name: "Store Manager", createdAt: now, createdBy: "System", perms: {
+      //     variable: true, product: true, barcode: true, customer: true,
+      //     sales: true, "return": true, repSummary: true, repDate: true,
+      //     userAccess: false, roleAccess: false } },
+      // { id: 4, name: "Sales Operator", createdAt: now, createdBy: "System", perms: {
+      //     variable: false, product: false, barcode: false, customer: true,
+      //     sales: true, "return": true, repSummary: false, repDate: false,
+      //     userAccess: false, roleAccess: false } }
     ];
   }
   function seedUsers() {
+    var now = new Date().toISOString();
     return [
       { id: 1, code: "USR-0001", name: "Md Shazid", username: "mdshazid",
-        password: "123456", roleId: 1, disabled: false, createdAt: new Date().toISOString() }
+        password: "123456", roleId: 1, disabled: false, createdAt: now },
+      { id: 2, code: "USR-0002", name: "Admin", username: "Admin",
+        password: "12345678", roleId: 2, disabled: false, createdAt: now }
     ];
   }
 
@@ -101,7 +132,7 @@
       batch: {},      // { "260815": lastBatchNo }
       roles: seedRoles(),
       users: seedUsers(),
-      seqCust: 2, seqVar: 5, seqSale: 1, seqRet: 1, seqRole: 4, seqUser: 2
+      seqCust: 2, seqVar: 5, seqSale: 1, seqRet: 1, seqRole: 5, seqUser: 3
     };
   }
 
