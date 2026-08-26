@@ -6,7 +6,33 @@
 <title>StockFlow · Inventory & Barcode Manager</title>
 <link rel="stylesheet" href="css/styles.css">
 </head>
-<body>
+<body class="locked">
+<!-- ══ Login ════════════════════════════════════════════ -->
+<div class="login-screen show" id="loginScreen">
+  <form class="login-card" id="loginForm">
+    <div class="login-brand">
+      <div class="mark">SF</div>
+      <div>
+        <h1>StockFlow</h1>
+        <small>Inventory Suite</small>
+      </div>
+    </div>
+    <h2>Sign in</h2>
+    <p class="login-sub">Use the user ID and password given to you.</p>
+
+    <div class="field">
+      <label for="loginUser">User ID</label>
+      <input class="input" id="loginUser" placeholder="e.g. mdshazid" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="loginPass">Password</label>
+      <input class="input" id="loginPass" type="password" placeholder="••••••" autocomplete="current-password" required>
+    </div>
+    <div class="login-err" id="loginErr"></div>
+    <button class="btn btn-primary btn-block" type="submit" style="margin-top:6px">Sign In</button>
+  </form>
+</div>
+
 <div class="app">
 
   <!-- ══ Sidebar ══════════════════════════════════════════ -->
@@ -57,6 +83,17 @@
           <button class="nav-item nav-child" data-page="repDate">By Date Stock</button>
         </div>
       </div>
+      <div class="nav-group" id="permGroup">
+        <button class="nav-item nav-parent" id="permToggle">
+          <svg viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.4 9.3-8 10-4.6-.7-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+          User Permission
+          <svg class="caret" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+        </button>
+        <div class="nav-sub">
+          <button class="nav-item nav-child" data-page="userAccess">User Access</button>
+          <button class="nav-item nav-child" data-page="roleAccess">Role Access</button>
+        </div>
+      </div>
     </nav>
 
     <div class="sidebar-foot">
@@ -72,6 +109,8 @@
       <div class="meta">
         <span id="todayLbl"></span>
         <span class="chip" id="nextCodeChip">—</span>
+        <span class="who" id="whoAmI"></span>
+        <button class="btn btn-quiet btn-sm" id="logoutBtn" title="Sign out">Logout</button>
       </div>
     </header>
 
@@ -85,7 +124,7 @@
             <!-- <p>Master list of article variations. Everything added here becomes selectable on the Add Product screen.</p> -->
           </div>
           <div class="head-actions">
-            <input class="input" id="varSearch" placeholder="Search article / name…" style="width:230px">
+            <input class="input" id="varSearch" placeholder="Search article / color / size…" style="width:230px">
             <button class="btn btn-primary" id="openVarModal">
               <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add Variable
             </button>
@@ -103,7 +142,7 @@
           <div class="table-wrap">
             <table>
               <thead><tr>
-                <th style="width:170px">Article No</th><th>Product Name</th>
+                <th style="width:170px">Article No</th>
                 <th style="width:150px">Color</th><th style="width:110px">Size</th>
                 <th style="width:90px"></th>
               </tr></thead>
@@ -127,10 +166,6 @@
                 <label for="pArticle">Article No</label>
                 <select class="input" id="pArticle"><option value="">— select from Product Variable —</option></select>
                 <div class="hint">Options come from module 1. Selecting one auto-fills the rest.</div>
-              </div>
-              <div class="field">
-                <label for="pName">Product Name</label>
-                <input class="input" id="pName" placeholder="Auto-filled" readonly>
               </div>
               <div class="row">
                 <div class="field">
@@ -185,7 +220,7 @@
             <table>
               <thead><tr>
                 <th style="width:170px">Barcode No</th><th style="width:140px">Article No</th>
-                <th>Product</th><th style="width:120px">Color</th><th style="width:80px">Size</th>
+                <th style="width:120px">Color</th><th style="width:80px">Size</th>
                 <th style="width:110px">Status</th><th style="width:160px">Generated</th>
               </tr></thead>
               <tbody id="recentBody"></tbody>
@@ -220,9 +255,9 @@
           <div class="table-wrap">
             <table>
               <thead><tr>
-                <th style="width:110px">Cust. ID</th><th>Name</th><th style="width:140px">Phone</th>
+                <th>Name</th><th style="width:140px">Phone</th>
                 <th style="width:190px">Email</th><th>Address</th>
-                <th style="width:90px" class="num">Orders</th><th style="width:90px"></th>
+                <th style="width:90px" class="num">Orders</th><th style="width:190px"></th>
               </tr></thead>
               <tbody id="custBody"></tbody>
             </table>
@@ -259,7 +294,7 @@
               <div class="table-wrap" style="border:1px solid var(--line);border-radius:10px;margin-top:6px">
                 <table>
                   <thead><tr>
-                    <th style="width:160px">Barcode</th><th>Product</th>
+                    <th style="width:160px">Barcode</th><th>Article / Variant</th>
                     <th style="width:100px" class="num">Price</th><th style="width:50px"></th>
                   </tr></thead>
                   <tbody id="cartBody"></tbody>
@@ -273,13 +308,13 @@
             <div class="card-body">
               <div class="kv"><span>Customer</span><b id="sumCust">—</b></div>
               <div class="kv"><span>Pairs</span><b id="sumItems">0</b></div>
-              <div class="kv"><span>Subtotal</span><b id="sumSub">৳ 0.00</b></div>
+              <div class="kv"><span>Subtotal</span><b id="sumSub">BDT 0.00</b></div>
               <div class="kv"><span>Discount</span>
                 <b><input class="input" id="sDiscount" type="number" min="0" value="0"
                           style="width:110px;padding:5px 9px;text-align:right"></b></div>
               <div class="kv" style="font-size:16px;padding-top:14px">
                 <span style="color:var(--txt)">Grand Total</span>
-                <b style="color:var(--accent)" id="sumTotal">৳ 0.00</b>
+                <b style="color:var(--accent)" id="sumTotal">BDT 0.00</b>
               </div>
               <button class="btn btn-primary btn-block" id="checkoutBtn" style="margin-top:18px" disabled>
                 Confirm Stock Out
@@ -324,7 +359,7 @@
               <div class="table-wrap" style="border:1px solid var(--line);border-radius:10px;margin-top:6px">
                 <table>
                   <thead><tr>
-                    <th style="width:150px">Barcode</th><th>Product</th>
+                    <th style="width:150px">Barcode</th><th>Article / Variant</th>
                     <th style="width:150px">Sold To</th>
                     <th style="width:95px" class="num">Price</th><th style="width:50px"></th>
                   </tr></thead>
@@ -355,7 +390,7 @@
               <div class="kv"><span>Pairs</span><b id="rSumItems">0</b></div>
               <div class="kv" style="font-size:16px;padding-top:14px">
                 <span style="color:var(--txt)" id="rSumLabel">Refund Amount</span>
-                <b style="color:var(--accent)" id="rSumTotal">৳ 0.00</b>
+                <b style="color:var(--accent)" id="rSumTotal">BDT 0.00</b>
               </div>
 
               <button class="btn btn-primary btn-block" id="retConfirm" style="margin-top:18px" disabled>
@@ -471,6 +506,7 @@
             <div style="flex:1;min-width:170px"><label class="lbl" for="bdType">Product Type</label>
               <select class="input" id="bdType">
                 <option value="">All types</option>
+                <option value="stockin">Stock In</option>
                 <option value="sold">Sold</option>
                 <option value="damage">Damage</option>
                 <option value="return">Return</option>
@@ -481,10 +517,15 @@
             <button class="btn btn-quiet" id="bdReset">Reset</button>
           </div>
         </div>
-
         <div class="card">
           <div class="card-head">
             <h3>Movement Detail</h3>
+            <div class="ptype-key">
+              <span class="ptype stockin"><i></i>= Stock In</span>
+              <span class="ptype sold"><i></i>= Sold</span>
+              <span class="ptype damage"><i></i>= Damage</span>
+              <span class="ptype return"><i></i>= Return</span>
+            </div>
             <span class="badge" id="bdRange">—</span>
           </div>
           <div class="table-wrap">
@@ -552,6 +593,76 @@
         </div>
       </section>
 
+      <!-- ── 9. USER ACCESS ──────────────────────────────── -->
+      <section class="page" id="page-userAccess">
+        <div class="page-head">
+          <div>
+            <h2>User Access</h2>
+            <p>Everyone who can sign in, and the role that decides what they see.</p>
+          </div>
+          <div class="head-actions">
+            <input class="input" id="usrSearch" placeholder="Search user id / name…" style="width:220px">
+            <button class="btn btn-ghost" id="openRoleModal">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add New Role
+            </button>
+            <button class="btn btn-primary" id="openUserModal">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add New User
+            </button>
+          </div>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><div class="k">Total Users</div><div class="v" id="statUsers">0</div></div>
+          <div class="stat"><div class="k">Active</div><div class="v accent" id="statActive">0</div></div>
+          <div class="stat"><div class="k">Roles</div><div class="v" id="statRoles">0</div></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>User List</h3><span class="badge" id="usrCount">0 users</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th style="width:130px">User ID</th>
+                <th>User Name</th>
+                <th style="width:180px">Role</th>
+                <th style="width:250px">Action</th>
+              </tr></thead>
+              <tbody id="usrBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ── 10. ROLE ACCESS ─────────────────────────────── -->
+      <section class="page" id="page-roleAccess">
+        <div class="page-head">
+          <div>
+            <h2>Role Access</h2>
+            <p>Every role and the modules it can open. Open a role to change its access.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-primary" id="openRoleModal2">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add New Role
+            </button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h3>Role List</h3><span class="badge" id="roleCount">0 roles</span></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Role Name</th>
+                <th style="width:190px">Created Date</th>
+                <th style="width:160px">Created By</th>
+                <th style="width:260px">Action</th>
+              </tr></thead>
+              <tbody id="roleBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
     </div>
   </main>
 </div>
@@ -572,10 +683,6 @@
         <div class="field">
           <label for="vArticle">Article No *</label>
           <input class="input" id="vArticle" placeholder="e.g. SH-1042" required>
-        </div>
-        <div class="field">
-          <label for="vName">Product Name *</label>
-          <input class="input" id="vName" placeholder="e.g. Leather Oxford Shoe" required>
         </div>
         <div class="row">
           <div class="field">
@@ -623,6 +730,126 @@
       <div class="modal-foot">
         <button type="button" class="btn btn-ghost" data-close>Cancel</button>
         <button type="submit" class="btn btn-primary">Save Customer</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ══ Modal: Customer Purchase History ══════════════════ -->
+<div class="modal-back" id="histModal">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3 id="histTitle">Purchase History</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-body" id="histBody"></div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-ghost" id="histExport">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+        Excel Export
+      </button>
+      <button type="button" class="btn btn-primary" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal: Add New User ═══════════════════════════════ -->
+<div class="modal-back" id="userModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Add New User</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <form id="userForm">
+      <div class="modal-body">
+        <div class="row">
+          <div class="field"><label for="uName">Full Name *</label>
+            <input class="input" id="uName" placeholder="e.g. Md Shazid" required></div>
+          <div class="field"><label for="uUser">User ID *</label>
+            <input class="input" id="uUser" placeholder="e.g. mdshazid" autocomplete="off" required>
+            <div class="hint">This is what they type on the login screen.</div></div>
+        </div>
+        <div class="row">
+          <div class="field"><label for="uPass">Password *</label>
+            <input class="input" id="uPass" type="text" placeholder="Minimum 6 characters" autocomplete="new-password" required></div>
+          <div class="field"><label for="uRole">Role *</label>
+            <select class="input" id="uRole" required></select>
+            <div class="hint">The role decides which modules they can open.</div></div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save User</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ══ Modal: Add New Role ═══════════════════════════════ -->
+<div class="modal-back" id="roleModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Add New Role</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <form id="roleForm">
+      <div class="modal-body">
+        <div class="field"><label for="rName">Role Name *</label>
+          <input class="input" id="rName" placeholder="e.g. Store Manager" required></div>
+        <div class="field">
+          <label>Module Access</label>
+          <div class="perm-grid" id="roleFormPerms"></div>
+          <div class="hint">You can change this any time from Role Access → View Access.</div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Role</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ══ Modal: Role Access (view / edit permissions) ══════ -->
+<div class="modal-back" id="accessModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="accessTitle">Role Access</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="access-bar">
+        <span class="hint" id="accessHint">Turn a module on to let this role open it.</span>
+        <div class="head-actions">
+          <button type="button" class="btn btn-quiet btn-sm" id="accessNone">Clear all</button>
+          <button type="button" class="btn btn-quiet btn-sm" id="accessAll">Select all</button>
+        </div>
+      </div>
+      <div class="perm-grid" id="accessPerms"></div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="button" class="btn btn-primary" id="accessSave">Save Access</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal: Reset Password ═════════════════════════════ -->
+<div class="modal-back" id="passModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h3 id="passTitle">Reset Password</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <form id="passForm">
+      <div class="modal-body">
+        <div class="field"><label for="pNew">New Password *</label>
+          <input class="input" id="pNew" type="text" placeholder="Minimum 6 characters" autocomplete="new-password" required>
+          <div class="hint">Share it with the user — it is stored as typed.</div></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Update Password</button>
       </div>
     </form>
   </div>

@@ -213,6 +213,9 @@ thead th{
 }
 tbody td{padding:13px 16px;border-bottom:1px solid var(--line-soft);color:var(--txt);vertical-align:middle}
 tbody tr:last-child td{border-bottom:0}
+/* Inline editable price in the stock-out cart */
+.price-cell{width:100%;max-width:110px;padding:6px 9px;text-align:right;
+  font-family:var(--mono);font-size:13px;margin-left:auto;display:block}
 tbody tr:hover{background:var(--panel-2)}
 td.mono,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:.4px}
 td.num{text-align:right;font-family:var(--mono)}
@@ -263,12 +266,21 @@ td.num{text-align:right;font-family:var(--mono)}
 .modal-foot{padding:16px 22px;border-top:1px solid var(--line-soft);background:var(--panel-2);display:flex;justify-content:flex-end;gap:10px}
 
 /* ── Barcode label ─────────────────────────────────────────── */
+/* A label is physically 1.5in × 1in — every size below is in inches so
+   the on-screen preview and the printed sticker are identical. */
 .label-preview{
-  display:flex;flex-direction:column;align-items:center;gap:6px;
-  padding:16px 0;background:#fff;border:1px solid var(--line);border-radius:10px;margin-bottom:14px;
+  display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:16px 0;background:var(--cream-2);border:1px solid var(--line);
+  border-radius:10px;margin-bottom:14px;
 }
-.label-preview svg{width:100%;max-width:320px;height:70px}
-.label-code{font-family:var(--mono);font-size:13px;letter-spacing:5px;color:var(--ink);font-weight:600}
+.label-size{font-size:11px;color:var(--txt-mute)}
+/* A batch can be 50 stickers — cap the preview height on screen, never in print */
+/* The preview sits in a narrow column-flex card, so auto-fill collapses to a
+   single track — pin it to two labels per row instead. */
+.label-preview .label-grid{
+  grid-template-columns:repeat(2,1.5in);justify-content:center;
+  max-height:3.9in;overflow-y:auto;padding:0 10px;
+}
 .kv{display:flex;justify-content:space-between;gap:16px;padding:9px 0;border-bottom:1px solid var(--line-soft);font-size:13px}
 .kv:last-of-type{border-bottom:0}
 .kv span{color:var(--txt-dim)}
@@ -276,20 +288,22 @@ td.num{text-align:right;font-family:var(--mono)}
 
 /* Sheet of printable labels */
 .label-grid{
-  display:grid;grid-template-columns:repeat(auto-fill,minmax(2in,2in));
-  gap:12px;justify-content:start;
+  display:grid;grid-template-columns:repeat(auto-fill,1.5in);
+  gap:10px;justify-content:start;
 }
 .lbl-card{
-  width:2in;height:1.5in;background:#fff;color:#000;border-radius:4px;
-  padding:.07in .09in;display:flex;flex-direction:column;justify-content:space-between;
-  border:1px solid #e3d5c8;overflow:hidden;
+  width:1.5in;height:1in;background:#fff;color:#000;box-sizing:border-box;
+  padding:.05in .06in;display:flex;flex-direction:column;justify-content:space-between;
+  border:1px solid #e3d5c8;border-radius:3px;overflow:hidden;
 }
-.lbl-card .t{font-size:9.5px;font-weight:700;line-height:1.2;
+/* Article No · Colour · Size, the three fields that ride above the bars */
+.lbl-info{display:flex;align-items:baseline;gap:.05in;line-height:1.1}
+.lbl-info .t{font-weight:800;font-size:7.5pt;flex:1;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lbl-card .s{font-size:8px;color:#5b5148;line-height:1.3}
-.lbl-card svg{width:100%;height:.52in;display:block}
-.lbl-card .c{font-family:var(--mono);font-size:8.5px;letter-spacing:1.4px;text-align:center;font-weight:700}
-
+.lbl-info .s{font-size:6.5pt;color:#000;white-space:nowrap}
+.lbl-info .s + .s{border-left:1px solid #999;padding-left:.05in}
+.lbl-card svg{width:100%;height:.42in;display:block}
+.lbl-card .c{font-family:var(--mono);font-size:6.5pt;letter-spacing:1.1px;text-align:center;font-weight:700;line-height:1}
 /* ── Scanner ───────────────────────────────────────────────── */
 .scan-box{
   display:flex;gap:10px;align-items:center;
@@ -315,7 +329,24 @@ td.num{text-align:right;font-family:var(--mono)}
   .card{border:0;box-shadow:none;background:#fff;margin:0}
   #page-barcode .card-body{padding:0}
   .label-grid{gap:0}
-  .lbl-card{border:1px dotted #bbb;page-break-inside:avoid;border-radius:0}
+  .lbl-card{border:1px dotted #bbb;page-break-inside:avoid;border-radius:0;
+            width:1.5in;height:1in}
+  /* Add Product: "Print Label" emits the sticker only, nothing else.
+     Hide by position, not :last-child — the label card is the last child
+     of .grid-2 and would disappear with it. */
+  #page-product .page-head,
+  #page-product > .card,                      /* Recently Generated table */
+  #page-product .grid-2 > .card:first-child,  /* the entry form */
+  #page-product .card-head,
+  #page-product .kv,#page-product .hint,#page-product .btn{display:none!important}
+  #page-product .grid-2{display:block;gap:0}
+  #page-product .card-body{padding:0}
+  .label-preview{border:0;padding:0;margin:0;background:#fff;display:block}
+  /* on paper, fill the sheet width instead of the two-up preview layout */
+  .label-preview .label-grid{grid-template-columns:repeat(auto-fill,1.5in);
+                             max-height:none;overflow:visible;
+                             justify-content:start;padding:0;gap:0}
+  .label-size{display:none!important}
   /* reports keep their heading and print full-width */
   .page-head{margin-bottom:12px}
   .page-head p{display:none}
@@ -374,7 +405,110 @@ table.rep tfoot td.num{text-align:right}
 /* Product-type pill (By Date Stock) */
 .ptype{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600}
 .ptype i{width:13px;height:13px;border-radius:3px;flex:0 0 13px;display:inline-block}
+.ptype.stockin i{background:#b4652a}
 .ptype.sold   i{background:#1f9d55}
 .ptype.damage i{background:#d64541}
 .ptype.return i{background:#0578ad}
 .ptype-legend{display:flex;gap:18px;flex-wrap:wrap}
+/* Colour key in the report card head — sits between the title and the range */
+.ptype-key{
+  display:flex;gap:16px;flex-wrap:wrap;margin-left:auto;margin-right:auto;
+  font-size:11.5px;color:var(--txt-dim);
+}
+.ptype-key .ptype{gap:5px;font-size:11.5px;font-weight:600;color:var(--txt-dim)}
+.ptype-key .ptype i{width:10px;height:10px;flex:0 0 10px;border-radius:2px}
+
+/* ── Customer purchase history ─────────────────────────────── */
+.modal-wide{max-width:1500px}
+.modal-back:has(.modal-wide){padding:34px 20px}
+.modal-wide .modal-body{max-height:72vh;overflow-y:auto}
+.row-actions{display:flex;gap:8px;justify-content:flex-end}
+
+.hist-stats{grid-template-columns:repeat(auto-fit,minmax(120px,1fr));margin-bottom:6px}
+.hist-stats .stat{padding:12px 14px}
+.hist-stats .v{font-size:18px}
+
+.hist-sub{font-size:13px;font-weight:700;color:var(--txt-dim);
+  text-transform:uppercase;letter-spacing:.8px;margin:22px 0 10px}
+
+.hist-table{border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.hist-table thead th{white-space:nowrap}
+.hist-table tfoot td{
+  padding:13px 16px;background:var(--cream-2);
+  border-top:2px solid var(--copper);font-weight:800;color:var(--ink);
+  font-family:var(--mono);font-size:13px;
+}
+.hist-table tfoot td.lbl-cell{
+  font-family:inherit;letter-spacing:1.2px;text-transform:uppercase;
+  font-size:11px;color:var(--txt-dim);font-weight:700;
+}
+.hist-table tfoot td.num{text-align:right}
+.hist-table tfoot td.accent{color:var(--copper)}
+.hist-table td.num,.hist-table tfoot td{white-space:nowrap}
+
+/* History table reads as a statement — every column centred */
+.hist-table th,.hist-table td,
+.hist-table td.num,.hist-table tfoot td,
+.hist-table tfoot td.num,.hist-table tfoot td.lbl-cell{text-align:center}
+.hist-table .swatch{justify-content:center}
+
+/* ── Login ─────────────────────────────────────────────────── */
+/* Hidden by default so a signed-in reload never flashes the form. */
+.login-screen{
+  position:fixed;inset:0;z-index:300;display:none;
+  align-items:center;justify-content:center;padding:24px;
+  background:var(--ink);
+  background-image:radial-gradient(circle at 20% 20%,rgba(180,90,32,.28),transparent 55%),
+                   radial-gradient(circle at 80% 80%,rgba(180,90,32,.16),transparent 55%);
+}
+.login-screen.show{display:flex}
+body.locked .app{display:none}
+
+.login-card{
+  width:100%;max-width:400px;background:var(--panel);
+  border:1px solid var(--line);border-radius:16px;padding:32px;
+  box-shadow:0 30px 70px rgba(0,0,0,.45);
+}
+.login-brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+.login-brand .mark{
+  width:42px;height:42px;border-radius:11px;background:var(--copper);color:#fff;
+  display:grid;place-items:center;font-weight:800;font-size:15px;letter-spacing:.5px;
+}
+.login-brand h1{font-size:17px;font-weight:800;color:var(--ink);line-height:1.1}
+.login-brand small{font-size:10.5px;letter-spacing:1.6px;text-transform:uppercase;color:var(--txt-mute)}
+.login-card h2{font-size:21px;font-weight:800;color:var(--ink)}
+.login-sub{font-size:13px;color:var(--txt-dim);margin:4px 0 20px}
+.login-err{
+  min-height:18px;font-size:12.5px;color:#c0392b;font-weight:600;margin-top:4px;
+}
+
+/* topbar identity */
+.who{font-size:12.5px;color:rgba(255,255,255,.9);font-weight:600;white-space:nowrap}
+
+/* ── Permission checkbox grid ──────────────────────────────── */
+.perm-grid{
+  border:1px solid var(--line);border-radius:10px;padding:6px 4px;
+  max-height:340px;overflow-y:auto;background:var(--cream-2);
+}
+.perm-group{
+  font-size:10.5px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;
+  color:var(--txt-mute);padding:12px 12px 5px;
+}
+.perm-row{
+  display:flex;align-items:center;gap:10px;cursor:pointer;
+  padding:9px 12px;border-radius:8px;font-size:13.5px;color:var(--txt);
+}
+.perm-row:hover{background:var(--panel-2)}
+.perm-row.sub{padding-left:26px}
+.perm-row input{width:16px;height:16px;accent-color:var(--copper);cursor:pointer;flex:0 0 16px}
+.perm-row input:checked + span{color:var(--ink);font-weight:600}
+
+.access-bar{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;
+  flex-wrap:wrap;margin-bottom:12px;
+}
+.access-bar .hint{margin:0}
+
+.modal-sm{max-width:420px}
+/* a disabled account should read as switched off at a glance */
+.row-off td{opacity:.55}
