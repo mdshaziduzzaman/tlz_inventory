@@ -172,6 +172,11 @@
     var r = roleOf(me);
     return !!(r && r.perms && r.perms[key]);
   }
+  /* Wiping the whole database is a Super Admin-only lever. */
+  function isSuperAdmin() {
+    var r = roleOf(me);
+    return !!(r && r.name === "Super Admin");
+  }
   function firstAllowed() {
     var m = MODULES.find(function (x) { return can(x.key); });
     return m ? m.key : "variable";
@@ -205,6 +210,7 @@
     });
     var r = roleOf(me);
     $("#whoAmI").textContent = me ? me.name + " · " + (r ? r.name : "No role") : "";
+    $("#resetData").style.display = isSuperAdmin() ? "" : "none";
   }
 
   function showLogin(msg) {
@@ -1120,6 +1126,7 @@
   /* ── reset ───────────────────────────────────────────── */
   $("#resetData").addEventListener("click", function (e) {
     e.preventDefault();
+    if (!isSuperAdmin()) { toast("Only a Super Admin can reset the data.", "err"); return; }
     if (!confirm("Clear all locally stored demo data?")) return;
     localStorage.removeItem(KEY);
     localStorage.removeItem(SKEY);
