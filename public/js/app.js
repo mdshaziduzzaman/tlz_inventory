@@ -243,14 +243,34 @@
     $("#productListShortcuts").style.display = can("variable") ? "" : "none";
     $("#editArticleBtn").style.display = isSuperAdmin() ? "" : "none";
 
+    /* Browsing the whole stock list from the till is a Super Admin thing;
+       everyone else works from the barcode in front of them. */
+    $("#openStockModal").style.display = isSuperAdmin() ? "" : "none";
+
     var who = me ? me.name + " · " + (me.roleName || "No role") : "";
     $("#whoAmI").textContent = who;
     $("#whoAmISide").textContent = who;
     $("#resetData").style.display = isSuperAdmin() ? "" : "none";
   }
 
+  /* Take the page name out of the address bar. Browser history entries
+     themselves cannot be removed by a page, so Back still walks the trail —
+     but each entry it lands on gets scrubbed on arrival, and none of them
+     names a screen any more. */
+  function scrubUrl() {
+    try { history.replaceState({ sfGuard: true }, "", location.pathname); } catch (e) {}
+  }
+
   function showLogin(msg) {
     me = null;
+    current = null;
+
+    /* Signing out has to forget where the last person was: the hash, the
+       remembered page, and the trail behind the current entry. Otherwise the
+       next sign-in lands on their screen and the address bar names it. */
+    try { localStorage.removeItem(PAGE_KEY); } catch (e) {}
+    scrubUrl();
+
     $("#loginErr").textContent = msg || "";
     $("#loginScreen").classList.add("show");
     document.body.classList.add("locked");
@@ -435,16 +455,16 @@
   function doLogout() {
     POST("logout")
       .catch(function () { /* the session is going away either way */ })
-      .then(function () {
-        /* Drop the page trail so Back cannot walk into a signed-out app. */
-        try { history.replaceState({ sfGuard: true }, "", "#"); } catch (e) {}
-        current = null;
-        showLogin("");
-      });
+      /* showLogin() clears the remembered page and scrubs the URL — every
+         route into the locked state needs that, not just this one. */
+      .then(function () { showLogin(""); });
   }
 
   window.addEventListener("popstate", function (e) {
-    if (document.body.classList.contains("locked")) return;   // already signed out
+    /* Signed out: Back is walking entries the last session left behind. It
+       cannot get into the app, but the hash would still put a page name in
+       the address bar — so wipe it off each entry as it is reached. */
+    if (document.body.classList.contains("locked")) { scrubUrl(); return; }
 
     var st = e.state;
     if (st && st.sfPage) {
