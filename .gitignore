@@ -1,2 +1,29 @@
+/vendor
+/node_modules
+/public/build
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/.phpunit.cache
+.phpunit.result.cache
+
+# Secrets and machine-local config — .env.example is the committed template.
+.env
+.env.backup
+.env.production
+/auth.json
+
+# Composer is bootstrapped per machine, not vendored into the repo.
+composer.phar
+
+npm-debug.log
+yarn-error.log
+
 .claude/
 Book1.xlsx
+~$*
+/.idea
+/.vscode
+/.fleet
+/.zed

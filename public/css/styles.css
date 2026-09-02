@@ -76,6 +76,13 @@ body{
 .nav-item.active{background:var(--copper);color:#fff;font-weight:650}
 .sidebar-foot{margin-top:auto;font-size:11px;color:#7c7168;padding:0 10px;line-height:1.6}
 .sidebar-foot a{color:#9b9089}
+.side-who{
+  color:#c9c0b8;font-size:12px;font-weight:600;line-height:1.4;
+  padding-bottom:8px;margin-bottom:8px;border-bottom:1px solid #2a2320;
+}
+.side-who:empty{display:none}
+/* Above the drawer breakpoint the topbar already shows this — no need twice. */
+@media (min-width:981px){.side-who{display:none}}
 
 .main{flex:1;min-width:0;display:flex;flex-direction:column}
 .topbar{
@@ -115,6 +122,9 @@ body{
   display:flex;align-items:center;justify-content:space-between;gap:14px;
 }
 .card-head h3{font-size:14.5px;font-weight:700;color:var(--ink)}
+/* Actions in a card head belong with whatever else sits on the right, not
+   stranded in the middle by space-between. */
+.card-head .head-actions{margin-left:auto}
 .card-body{padding:20px}
 .grid-2{display:grid;grid-template-columns:1fr 460px;gap:20px;align-items:start}
 @media (max-width:1180px){.grid-2{grid-template-columns:1fr}}
@@ -166,6 +176,9 @@ select.input{appearance:none;cursor:pointer;
   max-height:266px;   /* 7 × 38px rows */
 }
 .combo.open .combo-panel{display:block}
+/* Set by combo.js when there is not enough room below — otherwise the list
+   covers whatever sits under the field, such as a modal's Save button. */
+.combo.drop-up .combo-panel{top:auto;bottom:calc(100% + 6px)}
 .combo-opt{
   display:flex;align-items:center;gap:9px;
   height:38px;padding:0 11px;border-radius:7px;cursor:pointer;
@@ -182,6 +195,56 @@ select.input{appearance:none;cursor:pointer;
 .combo-panel::-webkit-scrollbar{width:8px}
 .combo-panel::-webkit-scrollbar-thumb{background:#e0cfc0;border-radius:8px;border:2px solid #fff}
 .combo-panel::-webkit-scrollbar-thumb:hover{background:var(--copper)}
+
+/* ── Combobox: multi-select chips ──────────────────────────── */
+/* The wrap itself is painted like an input, and the real text box sits
+   inside it with no border of its own, so chips and typing share one field. */
+.combo-multi{
+  display:flex;flex-wrap:wrap;align-items:center;gap:6px;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+  padding:6px 34px 6px 7px;min-height:44px;cursor:text;
+  transition:border-color .15s,box-shadow .15s;
+}
+.combo-multi:focus-within{
+  border-color:var(--copper);box-shadow:0 0 0 3px var(--accent-soft);background:#fff;
+}
+.combo-multi .combo-chips{display:contents}
+.combo-multi .combo-input{
+  flex:1 1 80px;min-width:80px;width:auto;
+  background:none!important;border:0!important;box-shadow:none!important;
+  padding:3px 2px!important;border-radius:0;
+}
+.combo-multi .combo-arrow{top:50%;transform:translateY(-50%)}
+.combo-multi.open .combo-arrow{transform:translateY(-50%) rotate(180deg)}
+.combo-chip{
+  display:inline-flex;align-items:center;gap:5px;
+  background:var(--accent-soft);border:1px solid rgba(180,101,42,.32);
+  color:var(--copper);font-weight:650;font-size:12.5px;font-family:var(--mono);
+  padding:3px 5px 3px 9px;border-radius:6px;line-height:1.5;white-space:nowrap;
+}
+.combo-chip-x{
+  background:none;border:0;cursor:pointer;color:var(--copper);
+  font-size:15px;line-height:1;padding:0 2px;opacity:.65;
+}
+.combo-chip-x:hover{opacity:1}
+
+/* ── Variable list: sizes grouped onto one row ─────────────── */
+.size-chips{display:flex;flex-wrap:wrap;gap:6px}
+.size-chip{
+  display:inline-flex;align-items:center;gap:2px;
+  background:var(--cream-2);border:1px solid var(--line);
+  border-radius:6px;padding:2px 3px 2px 9px;
+  font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ink);
+  line-height:1.6;
+}
+/* The × only earns its contrast on hover — a row of eight sizes should read
+   as data first, and eight delete buttons second. */
+.size-x{
+  background:none;border:0;cursor:pointer;color:var(--txt-mute);
+  font-size:15px;line-height:1;padding:0 3px;border-radius:4px;
+}
+.size-chip:hover .size-x{color:var(--danger)}
+.size-x:hover{background:rgba(192,57,43,.12)}
 
 /* ── Buttons ───────────────────────────────────────────────── */
 .btn{
@@ -214,8 +277,10 @@ thead th{
 tbody td{padding:13px 16px;border-bottom:1px solid var(--line-soft);color:var(--txt);vertical-align:middle}
 tbody tr:last-child td{border-bottom:0}
 /* Inline editable price in the stock-out cart */
-.price-cell{width:100%;max-width:110px;padding:6px 9px;text-align:right;
-  font-family:var(--mono);font-size:13px;margin-left:auto;display:block}
+/* Wide enough for a five-figure price plus the number spinners, which eat
+   about 20px of the box on their own. */
+.price-cell{width:100%;max-width:150px;padding:7px 10px;text-align:right;
+  font-family:var(--mono);font-size:13.5px;margin-left:auto;display:block}
 tbody tr:hover{background:var(--panel-2)}
 td.mono,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:.4px}
 td.num{text-align:right;font-family:var(--mono)}
@@ -444,7 +509,9 @@ table.rep tfoot td.num{text-align:right}
 }
 .hist-table tfoot td.num{text-align:right}
 .hist-table tfoot td.accent{color:var(--copper)}
-.hist-table td.num,.hist-table tfoot td{white-space:nowrap}
+/* The table scrolls sideways in its own container, so nothing needs to wrap
+   — a wrapped date turns one row into four lines of text. */
+.hist-table td,.hist-table tfoot td{white-space:nowrap}
 
 /* History table reads as a statement — every column centred */
 .hist-table th,.hist-table td,
@@ -484,6 +551,13 @@ body.locked .app{display:none}
 
 /* topbar identity */
 .who{font-size:12.5px;color:rgba(255,255,255,.9);font-weight:600;white-space:nowrap}
+/* btn-quiet is tuned for the cream page background; on the copper bar its
+   muted brown all but disappears, so the logout control gets its own. */
+.topbar .btn-quiet{
+  color:#fff;background:rgba(255,255,255,.14);
+  border:1px solid rgba(255,255,255,.3);
+}
+.topbar .btn-quiet:hover{background:rgba(255,255,255,.26);color:#fff}
 
 /* ── Permission checkbox grid ──────────────────────────────── */
 .perm-grid{
@@ -510,5 +584,189 @@ body.locked .app{display:none}
 .access-bar .hint{margin:0}
 
 .modal-sm{max-width:420px}
+
+/* Master size list inside the Add Size modal — the same chips the multi-select
+   combobox uses, so the list you manage looks like the list you pick from. */
+.size-pool{
+  display:flex;flex-wrap:wrap;gap:6px;
+  padding:10px;border:1px solid var(--line);border-radius:8px;
+  background:var(--panel-2);min-height:44px;align-items:center;
+}
 /* a disabled account should read as switched off at a glance */
 .row-off td{opacity:.55}
+
+/* ── Article image ─────────────────────────────────────────── */
+/* The picker in the Add Articles modal. A native file input cannot be
+   styled, so it is hidden and this stands in for it. */
+.image-drop{
+  position:relative;display:flex;align-items:center;justify-content:center;
+  min-height:118px;padding:10px;cursor:pointer;
+  background:var(--panel-2);border:1px dashed var(--line);border-radius:10px;
+  transition:border-color .15s,background .15s;
+}
+.image-drop:hover,.image-drop:focus-visible{
+  border-color:var(--copper);background:var(--cream-2);outline:none;
+}
+.image-drop.dragover{border-color:var(--copper);background:var(--accent-soft)}
+.image-drop img{max-height:150px;max-width:100%;border-radius:7px;display:block}
+.image-drop-empty{
+  display:flex;flex-direction:column;align-items:center;gap:7px;
+  color:var(--txt-mute);font-size:12.5px;text-align:center;
+}
+/* An explicit display beats the hidden attribute, which would otherwise
+   leave the placeholder sitting next to the preview it was replaced by. */
+.image-drop [hidden]{display:none!important}
+.image-drop-empty svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.6}
+.image-drop-x{
+  position:absolute;top:6px;right:6px;width:24px;height:24px;
+  display:grid;place-items:center;cursor:pointer;
+  background:var(--ink);color:#fff;border:0;border-radius:50%;
+  font-size:16px;line-height:1;opacity:.82;
+}
+.image-drop-x:hover{opacity:1}
+
+
+/* The article photo that rides at the head of the Add Product field. It is a
+   preview, not a control — pointer-events off so clicking it still opens the
+   dropdown the way clicking anywhere else in the field does. */
+.combo.has-thumb .combo-input{padding-left:46px!important}
+.field-thumb{
+  position:absolute;left:6px;top:50%;transform:translateY(-50%);z-index:2;
+  width:32px;height:32px;border-radius:6px;overflow:hidden;pointer-events:none;
+  display:grid;place-items:center;
+  background:var(--cream-2);border:1px solid var(--line);color:var(--txt-mute);
+}
+.field-thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.field-thumb svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:1.7}
+/* Nothing to show yet — keep it quiet rather than drawing the eye to a gap.
+   Not ".empty": that is the app-wide placeholder class and it carries
+   44px of padding, which inflated this box to 90px and pushed it over the
+   field label. */
+.field-thumb.is-empty{opacity:.5}
+/* The thumbnail in the Article List. */
+.thumb{
+  width:46px;height:46px;overflow:hidden;display:grid;place-items:center;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+  color:var(--txt-mute);
+}
+.thumb img{width:100%;height:100%;object-fit:cover;display:block}
+.thumb svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:1.7}
+/* Table rows are tighter than the Article List — same thumb, smaller. */
+.thumb-sm{width:34px;height:34px;border-radius:6px}
+.thumb-sm svg{width:14px;height:14px}
+
+/* ══ Responsive ════════════════════════════════════════════════
+   The desktop layout is a fixed 248px sidebar next to the content. Below
+   980px that sidebar becomes an off-canvas drawer instead of eating half a
+   phone screen, and the header rearranges to match. Everything above that
+   width is left exactly as it was.
+   ─────────────────────────────────────────────────────────────── */
+
+/* Hidden on desktop; the drawer handle on smaller screens. */
+.hamburger{
+  display:none;
+  background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.3);
+  border-radius:8px;color:#fff;cursor:pointer;
+  padding:7px;margin-right:12px;flex:0 0 auto;line-height:0;
+}
+.hamburger svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:2}
+.hamburger:hover{background:rgba(255,255,255,.24)}
+
+.nav-scrim{
+  position:fixed;inset:0;z-index:40;
+  background:rgba(30,18,8,.5);backdrop-filter:blur(2px);
+  opacity:0;pointer-events:none;transition:opacity .2s;
+}
+
+@media (max-width:980px){
+  .hamburger{display:inline-flex}
+
+  /* Out of the flex flow entirely, so .main gets the full width. */
+  .sidebar{
+    position:fixed;top:0;left:0;bottom:0;
+    height:100vh;height:100dvh;   /* dvh keeps the drawer clear of mobile browser chrome */
+    z-index:50;width:264px;flex-basis:264px;
+    transform:translateX(-100%);
+    transition:transform .22s ease;
+    overflow-y:auto;
+    box-shadow:0 0 40px rgba(0,0,0,.4);
+  }
+  .app.nav-open .sidebar{transform:none}
+  .app.nav-open .nav-scrim{opacity:1;pointer-events:auto}
+
+  .topbar{padding:0 16px;height:56px}
+  .topbar .meta{gap:12px}
+  .content{padding:20px 16px 48px}
+
+  .page-head h2{font-size:19px}
+  /* A search box and an Add button side by side stop fitting here. */
+  .head-actions{width:100%;flex-wrap:wrap}
+  .head-actions .input{flex:1 1 200px;width:auto!important}
+
+  .modal-back{padding:24px 14px}
+  .modal-back:has(.modal-wide){padding:24px 14px}
+  .modal-wide .modal-body{max-height:none}
+}
+
+/* Phones. The header keeps only navigation, the page name, and the way out. */
+@media (max-width:640px){
+  .topbar{padding:0 12px;gap:8px}
+  /* One line, truncated — two lines would push the bar out of alignment. */
+  .topbar .crumb{
+    font-size:12px;min-width:0;flex:1 1 auto;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  /* The date and the next-barcode chip are reference, not controls — the
+     chip is repeated on the Add Product card, so nothing is lost. The
+     signed-in name moves into the drawer, which has room for it. */
+  .topbar #todayLbl,.topbar .chip,.topbar .who{display:none}
+  .topbar .meta{flex:0 0 auto}
+
+  .content{padding:16px 12px 40px}
+  .card-body{padding:16px}
+  .card-head{padding:14px 16px;flex-wrap:wrap;gap:8px}
+
+  .stats{grid-template-columns:repeat(2,1fr);gap:10px}
+  .stat{padding:13px 14px}
+  .stat .v{font-size:19px}
+
+  .page-head{gap:14px;margin-bottom:18px}
+  .page-head h2{font-size:18px}
+  .page-head p{font-size:12.5px}
+
+  /* Scanner: the Add button drops under the input rather than squashing it. */
+  .scan-box{flex-wrap:wrap;padding:12px}
+  .scan-box .input{flex:1 1 100%}
+  .scan-box .btn{width:100%}
+
+  .modal-back{padding:0}
+  .modal,.modal-sm,.modal-wide{
+    max-width:none;border-radius:0;border-width:0;
+    min-height:100vh;min-height:100dvh;
+    /* Column layout pins the footer to the bottom of the screen instead of
+       leaving it floating wherever the content happens to end. */
+    display:flex;flex-direction:column;
+  }
+  .modal form{display:flex;flex-direction:column;flex:1}
+  .modal-body{flex:1}
+  .modal-head{position:sticky;top:0;z-index:2;border-radius:0}
+  .modal-foot{flex-wrap:wrap}
+  .modal-foot .btn{flex:1 1 auto}
+
+  /* Two 1.5in labels do not fit across a phone; show them one up. */
+  .label-preview .label-grid{grid-template-columns:1.5in}
+
+  .ptype-key{display:none}
+  .access-bar{gap:10px}
+  .row-actions{flex-wrap:wrap}
+}
+
+/* Very narrow phones — one stat per row reads better than two cramped ones. */
+@media (max-width:380px){
+  .stats{grid-template-columns:1fr}
+}
+
+/* The drawer is a small-screen affordance; printing must never show it. */
+@media print{
+  .hamburger,.nav-scrim{display:none!important}
+}

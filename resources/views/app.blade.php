@@ -4,11 +4,40 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>StockFlow · Inventory & Barcode Manager</title>
-<link rel="stylesheet" href="css/styles.css">
+<meta name="csrf-token" content="{{ csrf_token() }}">
+<link rel="stylesheet" href="{{ asset("css/styles.css") }}?v={{ filemtime(public_path("css/styles.css")) }}">
+{{--
+  The markup ships with Product Variable marked active. When the browser was
+  last on some other page, that is the wrong screen — and on a big document
+  the parser paints before the script at the end of the body can correct it.
+
+  So: if a switch is coming, hide the pages from here, before a single one is
+  painted. A blank panel for a frame is honest; the wrong page is not. The
+  script at the end of the body sets the real classes and lifts this again.
+--}}
+<script>
+(function () {
+  try {
+    var page = (location.hash || "").replace(/^#/, "") ||
+               localStorage.getItem("stockflow.page") || "";
+    /* Only bother when it is not the page the markup already shows, and only
+       for a name that looks like one of ours. */
+    if (!page || page === "variable" || !/^[A-Za-z]+$/.test(page)) return;
+    document.write('<style id="bootHide">.page{display:none!important}</style>');
+  } catch (e) { /* leave the markup as it is */ }
+})();
+</script>
 </head>
-<body class="locked">
+{{--
+  Which of the two screens to paint is decided here, not after the /api/me
+  round trip. Starting locked meant a signed-in reload always flashed the
+  login form for the length of that request. The JS still asks the server and
+  still locks up if the session is gone — this only sets the first paint.
+--}}
+@php($signedIn = auth()->check())
+<body @class(['locked' => ! $signedIn])>
 <!-- ══ Login ════════════════════════════════════════════ -->
-<div class="login-screen show" id="loginScreen">
+<div @class(['login-screen', 'show' => ! $signedIn]) id="loginScreen">
   <form class="login-card" id="loginForm">
     <div class="login-brand">
       <div class="mark">SF</div>
@@ -35,8 +64,11 @@
 
 <div class="app">
 
+  <!-- Dims the page behind the drawer, and closes it when tapped. -->
+  <div class="nav-scrim" id="navScrim"></div>
+
   <!-- ══ Sidebar ══════════════════════════════════════════ -->
-  <aside class="sidebar">
+  <aside class="sidebar" id="sidebar">
     <div class="brand">
       <div class="mark">SF</div>
       <div>
@@ -97,14 +129,19 @@
     </nav>
 
     <div class="sidebar-foot">
-      Data is stored locally in this browser.<br>
-      <a href="#" id="resetData" style="color:var(--txt-mute)">Reset demo data</a>
+      <!-- On a phone the topbar has no room for the signed-in name, so the
+           drawer carries it instead. -->
+      <div class="side-who" id="whoAmISide"></div>
+      <a href="#" id="resetData" style="color:var(--txt-mute)">Reset all data</a>
     </div>
   </aside>
 
   <!-- ══ Main ═════════════════════════════════════════════ -->
   <main class="main">
     <header class="topbar">
+      <button class="hamburger" id="navToggle" aria-label="Menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
       <div class="crumb">StockFlow &nbsp;/&nbsp; <b id="crumb">Product Variable</b></div>
       <div class="meta">
         <span id="todayLbl"></span>
@@ -124,27 +161,34 @@
             <!-- <p>Master list of article variations. Everything added here becomes selectable on the Add Product screen.</p> -->
           </div>
           <div class="head-actions">
-            <input class="input" id="varSearch" placeholder="Search article / color / size…" style="width:230px">
+            <input class="input" id="varSearch" placeholder="Search article no…" style="width:230px">
+            <button class="btn btn-ghost" id="openSizeModal">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add Size
+            </button>
+            <button class="btn btn-ghost" id="openColorModal">
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add Color
+            </button>
             <button class="btn btn-primary" id="openVarModal">
-              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add Variable
+              <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add Article
             </button>
           </div>
         </div>
 
         <div class="stats">
-          <div class="stat"><div class="k">Total Variables</div><div class="v" id="statVars">0</div></div>
-          <div class="stat"><div class="k">Distinct Colors</div><div class="v" id="statColors">0</div></div>
-          <div class="stat"><div class="k">Distinct Sizes</div><div class="v" id="statSizes">0</div></div>
+          <div class="stat"><div class="k">Articles</div><div class="v" id="statVars">0</div></div>
+          <div class="stat"><div class="k">Colors</div><div class="v" id="statColors">0</div></div>
+          <div class="stat"><div class="k">Sizes</div><div class="v" id="statSizes">0</div></div>
         </div>
 
         <div class="card">
-          <div class="card-head"><h3>Variable List</h3><span class="badge" id="varCount">0 items</span></div>
+          <div class="card-head"><h3>Article List</h3><span class="badge" id="varCount">0 items</span></div>
           <div class="table-wrap">
             <table>
               <thead><tr>
-                <th style="width:170px">Article No</th>
-                <th style="width:150px">Color</th><th style="width:110px">Size</th>
-                <th style="width:90px"></th>
+                <th style="width:74px">Image</th>
+                <th>Article No</th>
+                <th style="width:120px" class="num">In Stock</th>
+                <th style="width:230px"></th>
               </tr></thead>
               <tbody id="varBody"></tbody>
             </table>
@@ -159,22 +203,44 @@
           <div class="card">
             <div class="card-head">
               <h3>Product Details</h3>
+              {{-- Shortcuts to the same modals the Product Variable page
+                   opens. Typing a new article or colour here already creates
+                   it, but only these can attach a photo — and they save a
+                   trip to the other screen. Hidden for a role without access
+                   to that module. --}}
+              <div class="head-actions" id="productListShortcuts">
+                {{-- Edits whichever article the field below is holding, so it
+                     stays disabled until that name matches one on the list.
+                     Super Admin only, like the same button on Product
+                     Variable — the server enforces it either way. --}}
+                <button class="btn btn-ghost btn-sm" id="editArticleBtn" disabled>
+                  <svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>
+                  Edit Article
+                </button>
+                <button class="btn btn-ghost btn-sm" id="openColorModal2">
+                  <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg> Add Color
+                </button>
+              </div>
               <span class="chip" id="previewCode">—</span>
             </div>
             <div class="card-body">
+              {{-- Article and colour are typed, not chosen from a fixed list:
+                   whatever has been entered before comes back as suggestions,
+                   and anything new is created just by typing it. Size is the
+                   one fixed list, 38 to 46. --}}
               <div class="field">
                 <label for="pArticle">Article No</label>
-                <select class="input" id="pArticle"><option value="">— select from Product Variable —</option></select>
-                <div class="hint">Options come from module 1. Selecting one auto-fills the rest.</div>
+                <input class="input" id="pArticle" placeholder="Type or pick an article" required>
+                <div class="hint">Type a new one, or click to pick one you have used before.</div>
               </div>
               <div class="row">
                 <div class="field">
                   <label for="pColor">Color</label>
-                  <input class="input" id="pColor" placeholder="Auto-filled" readonly>
+                  <input class="input" id="pColor" placeholder="Type or pick a colour" required>
                 </div>
                 <div class="field">
                   <label for="pSize">Size</label>
-                  <input class="input" id="pSize" placeholder="Auto-filled" readonly>
+                  <select class="input" id="pSize"><option value="">— select a size —</option></select>
                 </div>
               </div>
               <div class="row">
@@ -187,10 +253,6 @@
                   <label for="pPrice">Price per Pair (BDT)</label>
                   <input class="input" id="pPrice" type="number" min="0" placeholder="0.00">
                 </div>
-              </div>
-              <div class="field">
-                <label for="pRemarks">Remarks</label>
-                <textarea class="input" id="pRemarks" placeholder="e.g. box damaged, sample pair, export lot"></textarea>
               </div>
               <div style="display:flex;align-items:center;gap:14px;margin-top:4px">
                 <button class="btn btn-primary" id="genBtn">
@@ -272,6 +334,14 @@
             <h2>Sales / Stock Out</h2>
             <p>Select a customer, then scan barcodes one by one. Each scanned item is moved out of stock instantly.</p>
           </div>
+          <div class="head-actions">
+            {{-- For when the label is unreadable or the box is not to hand:
+                 look the pair up instead of scanning it. --}}
+            <button class="btn btn-ghost" id="openStockModal">
+              <svg viewBox="0 0 24 24"><path d="M3 5v14M7 5v14M11 5v10M15 5v14M18 5v14M21 5v10"/></svg>
+              Show Barcode
+            </button>
+          </div>
         </div>
 
         <div class="grid-2">
@@ -295,7 +365,7 @@
                 <table>
                   <thead><tr>
                     <th style="width:160px">Barcode</th><th>Article / Variant</th>
-                    <th style="width:100px" class="num">Price</th><th style="width:50px"></th>
+                    <th style="width:170px" class="num">Price</th><th style="width:50px"></th>
                   </tr></thead>
                   <tbody id="cartBody"></tbody>
                 </table>
@@ -667,39 +737,155 @@
   </main>
 </div>
 
-<!-- ══ Modal: Add Variable ═══════════════════════════════ -->
+<!-- ══ Modal: Add Article ════════════════════════════════ -->
 <div class="modal-back" id="varModal">
   <div class="modal">
     <div class="modal-head">
-      <h3>Add Product Variable</h3>
+      <h3>Article Numbers</h3>
       <button class="x" data-close>&times;</button>
-      <button class="nav-item" data-page="barcode">
-        <svg viewBox="0 0 24 24"><path d="M3 5v14M7 5v14M11 5v10M15 5v14M18 5v14M21 5v10"/></svg>
-        Barcode Manage
-      </button>
     </div>
     <form id="varForm">
       <div class="modal-body">
+        {{-- No "on the list now" pool here: the Article List table behind
+             this modal already shows them, with the same remove rule. --}}
         <div class="field">
-          <label for="vArticle">Article No *</label>
+          <label for="vArticle">Add article numbers *</label>
           <input class="input" id="vArticle" placeholder="e.g. SH-1042" required>
-        </div>
-        <div class="row">
-          <div class="field">
-            <label for="vColor">Color *</label>
-            <input class="input" id="vColor" placeholder="Type or pick a colour" required>
-            <div class="hint">e.g. Black, Brown, Tan.</div>
+          <div class="hint">
+            These become selectable on <b>Add Product</b>. Press <b>Enter</b> or
+            comma after each one.
           </div>
-          <div class="field">
-            <label for="vSize">Size *</label>
-            <input class="input" id="vSize" placeholder="Type or pick a size" required>
-            <div class="hint">e.g. 38 to 45.</div>
+        </div>
+        <div class="field">
+          <label for="vImage">Article image</label>
+          {{-- Optional. The visible control is the drop zone below; the real
+               input is hidden because a native file button cannot be styled. --}}
+          <input type="file" id="vImage" accept="image/jpeg,image/png,image/webp" hidden>
+          <div class="image-drop" id="vImageDrop" tabindex="0" role="button"
+               aria-label="Choose an article image">
+            <img id="vImagePreview" alt="" hidden>
+            <div class="image-drop-empty" id="vImageEmpty">
+              <svg viewBox="0 0 24 24"><path d="M21 15V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10"/><path d="M3 16l5-5 4 4"/><circle cx="15" cy="8" r="1.4"/><path d="M18 15v6M15 18h6"/></svg>
+              <span>Click to choose a photo</span>
+            </div>
+            <button type="button" class="image-drop-x" id="vImageClear" hidden
+                    aria-label="Remove the chosen image">&times;</button>
+          </div>
+          <div class="hint">
+            JPG, PNG or WebP, up to 4&nbsp;MB. Applies to the article numbers
+            you add here.
           </div>
         </div>
       </div>
       <div class="modal-foot">
         <button type="button" class="btn btn-ghost" data-close>Cancel</button>
-        <button type="submit" class="btn btn-primary">Save Variable</button>
+        <button type="submit" class="btn btn-primary">Save Articles</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ══ Modal: Master size list ═══════════════════════════ -->
+<div class="modal-back" id="sizeModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h3>Sizes</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <form id="sizeForm">
+      <div class="modal-body">
+        <div class="field">
+          <label>On the list now</label>
+          {{-- Filled by renderSizeChips(); each chip carries a remove button
+               for Super Admin, matching the delete rule on variants. --}}
+          <div class="size-pool" id="sizePool"></div>
+          <div class="hint" id="sizePoolHint"></div>
+        </div>
+        <div class="field">
+          <label for="newSizes">Add sizes *</label>
+          <input class="input" id="newSizes" placeholder="Type a size and press Enter…" required>
+          <div class="hint">
+            These become selectable on <b>Add Product</b>. Press <b>Enter</b> or
+            comma after each one.
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Sizes</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+<!-- ══ Modal: edit one article ═══════════════════════════ -->
+<div class="modal-back" id="varEditModal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Edit Article</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <form id="varEditForm">
+      <div class="modal-body">
+        <div class="field">
+          <label for="evArticle">Article No *</label>
+          <input class="input" id="evArticle" placeholder="e.g. SH-1042" required>
+          {{-- Barcodes store the article as text, so a rename has to sweep
+               them too. The count is filled in by openArticleEdit(). --}}
+          <div class="hint" id="evArticleHint"></div>
+        </div>
+        <div class="field">
+          <label for="evImage">Article image</label>
+          <input type="file" id="evImage" accept="image/jpeg,image/png,image/webp" hidden>
+          <div class="image-drop" id="evImageDrop" tabindex="0" role="button"
+               aria-label="Choose an article image">
+            <img id="evImagePreview" alt="" hidden>
+            <div class="image-drop-empty" id="evImageEmpty">
+              <svg viewBox="0 0 24 24"><path d="M21 15V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10"/><path d="M3 16l5-5 4 4"/><circle cx="15" cy="8" r="1.4"/><path d="M18 15v6M15 18h6"/></svg>
+              <span>Click to choose a photo</span>
+            </div>
+            <button type="button" class="image-drop-x" id="evImageClear" hidden
+                    aria-label="Remove the image">&times;</button>
+          </div>
+          <div class="hint">JPG, PNG or WebP, up to 4&nbsp;MB. The &times; removes it.</div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Changes</button>
+      </div>
+    </form>
+  </div>
+</div>
+<!-- ══ Modal: master colour list ═════════════════════════ -->
+<div class="modal-back" id="colorModal">
+  <div class="modal modal-sm">
+    <div class="modal-head">
+      <h3>Colors</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <form id="colorForm">
+      <div class="modal-body">
+        <div class="field">
+          <label>On the list now</label>
+          {{-- Filled by renderColorChips(); each chip carries a remove button
+               for Super Admin, matching the delete rule on the other lists. --}}
+          <div class="size-pool" id="colorPool"></div>
+          <div class="hint" id="colorPoolHint"></div>
+        </div>
+        <div class="field">
+          <label for="newColors">Add colours *</label>
+          <input class="input" id="newColors" placeholder="Type a colour and press Enter…" required>
+          <div class="hint">
+            These become selectable on <b>Add Product</b>. Press <b>Enter</b> or
+            comma after each one.
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Colors</button>
       </div>
     </form>
   </div>
@@ -855,10 +1041,94 @@
   </div>
 </div>
 
+{{-- Shared by every row of the Article List: clicking a row's image button
+     opens this one input, so the table does not carry one per article. --}}
+<input type="file" id="rowImage" accept="image/jpeg,image/png,image/webp" hidden>
+
+
+<!-- ══ Modal: barcodes available to sell ═════════════════ -->
+<div class="modal-back" id="stockModal">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3>Available Barcodes</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="access-bar">
+        <input class="input" id="stockSearch" placeholder="Search barcode / article / color / size…"
+               style="max-width:340px">
+        <span class="badge" id="stockCount">0</span>
+      </div>
+      {{-- Filled by renderStockPicker(); a row adds that pair to the cart. --}}
+      <div class="table-wrap">
+        <table class="hist-table">
+          <thead><tr>
+            <th style="width:64px">Image</th>
+            <th style="width:150px">Barcode</th>
+            <th style="width:130px">Article No</th>
+            <th style="width:120px">Color</th>
+            <th style="width:70px">Size</th>
+            <th style="width:110px" class="num">Price</th>
+            <th style="width:110px"></th>
+          </tr></thead>
+          <tbody id="stockBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-primary" data-close>Done</button>
+    </div>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
-<script src="js/barcode.js"></script>
-<script src="js/combo.js"></script>
-<script src="js/app.js"></script>
+{{--
+  Put the remembered page on screen the instant the markup is parsed.
+
+  This has to be inline. app.js does the same thing properly, but it is an
+  external file: the browser paints the parsed HTML while that download is
+  still in flight, so the page marked active in the markup — Product Variable
+  — is what you see until it lands. On a slow connection that was most of a
+  second of the wrong screen before it jumped.
+
+  Deliberately dumb: no permission check (nobody is loaded yet) and no error
+  path. app.js re-applies this authoritatively a moment later and moves the
+  user if their role cannot open the page.
+--}}
+<script>
+(function () {
+  try {
+    var el, page = (location.hash || "").replace(/^#/, "");
+    if (!document.getElementById("page-" + page)) {
+      page = localStorage.getItem("stockflow.page") || "";
+    }
+    el = document.getElementById("page-" + page);
+    if (!el || el.classList.contains("active")) return;
+
+    var open = document.querySelector(".page.active");
+    if (open) open.classList.remove("active");
+    el.classList.add("active");
+
+    var was = document.querySelector(".sidebar .nav-item.active");
+    if (was) was.classList.remove("active");
+    var tab = document.querySelector('.sidebar .nav-item[data-page="' + page + '"]');
+    if (tab) {
+      tab.classList.add("active");
+      var group = tab.closest(".nav-group");
+      if (group) group.classList.add("open");
+    }
+  } catch (e) { /* app.js will sort it out */ }
+  finally {
+    /* Whatever happened above, the pages must become visible again — the
+       head put this in place expecting us to take it away. */
+    var hide = document.getElementById("bootHide");
+    if (hide) hide.remove();
+  }
+})();
+</script>
+
+<script src="{{ asset("js/barcode.js") }}?v={{ filemtime(public_path("js/barcode.js")) }}"></script>
+<script src="{{ asset("js/combo.js") }}?v={{ filemtime(public_path("js/combo.js")) }}"></script>
+<script src="{{ asset("js/app.js") }}?v={{ filemtime(public_path("js/app.js")) }}"></script>
 </body>
 </html>

@@ -3,7 +3,6 @@
   "use strict";
 
   var KEY  = "stockflow.v1";
-  var SKEY = "stockflow.session";
 
   /* Every page the permission system can grant. Order drives the nav. */
   var MODULES = [
@@ -18,122 +17,127 @@
     { key: "userAccess", label: "User Access",    group: "User Permission" },
     { key: "roleAccess", label: "Role Access",    group: "User Permission" }
   ];
-  function allPerms() {
-    var p = {};
-    MODULES.forEach(function (m) { p[m.key] = true; });
-    return p;
+
+  /* The in-memory mirror of what the server holds. Every render function
+     reads from here exactly as it did when this was a localStorage blob —
+     the difference is that nothing writes to it except an API response. */
+  var db = {
+    articles: [], colors: [], sizes: [],
+    customers: [], products: [], sales: [], returns: [],
+    roles: [], users: [], nextCode: "—"
+  };
+
+  /* ── API client ──────────────────────────────────────── */
+  var CSRF = (document.querySelector('meta[name="csrf-token"]') || {}).content || "";
+
+  function ApiError(message, status, errors) {
+    this.message = message; this.status = status; this.errors = errors || {};
   }
-  /* Everything except the User Permission group. */
-  function adminPerms() {
-    var p = allPerms();
-    p.userAccess = false; p.roleAccess = false;
-    return p;
-  }
+  ApiError.prototype = Object.create(Error.prototype);
 
-  var db = load();
+  function api(method, path, body, retried) {
+    /* A file upload has to go as multipart, and the browser must set that
+       header itself so it can add the boundary — so Content-Type is only ours
+       to declare for the JSON case. */
+    var isForm = body instanceof FormData;
 
-  /* ── storage ─────────────────────────────────────────── */
-  function load() {
-    try {
-      var raw = JSON.parse(localStorage.getItem(KEY));
-      if (raw && raw.variables) {
-        if (!raw.returns) raw.returns = [];   // upgrade older saved data
-        if (!raw.seqRet)  raw.seqRet = 1;
-        // Remove the retired product-name field from previously saved browser data.
-        raw.variables.forEach(function (v) { delete v.name; });
-        (raw.products || []).forEach(function (p) { delete p.name; });
-        upgradeAuth(raw);
-        localStorage.setItem(KEY, JSON.stringify(raw));
-        return raw;
-      }
-    } catch (e) { /* fall through to seed */ }
-    return seed();
-  }
-  function save() { localStorage.setItem(KEY, JSON.stringify(db)); }
-
-  /* Data saved before the permission system existed has no roles or users —
-     give it the same seed the fresh install gets, so nobody is locked out. */
-  function upgradeAuth(raw) {
-    if (!raw.roles || !raw.roles.length) {
-      raw.roles = seedRoles();
-      raw.seqRole = raw.roles.length + 1;
-    }
-    if (!raw.users || !raw.users.length) {
-      raw.users = seedUsers();
-      raw.seqUser = raw.users.length + 1;
-    }
-
-    /* an install written by an older build may not carry these counters */
-    if (!raw.seqRole) raw.seqRole = Math.max.apply(null, raw.roles.map(function (r) { return r.id; })) + 1;
-    if (!raw.seqUser) raw.seqUser = Math.max.apply(null, raw.users.map(function (u) { return u.id; })) + 1;
-
-    var byRole = function (n) {
-      return raw.roles.find(function (r) { return r.name.toLowerCase() === n.toLowerCase(); });
+    var headers = {
+      "Accept": "application/json",
+      "X-CSRF-TOKEN": CSRF,
+      "X-Requested-With": "XMLHttpRequest"
     };
-    /* A build that ships a new stock role has to add it to installs that were
-       seeded before it existed — matched by name, so it never duplicates. */
-    if (!byRole("Admin")) {
-      raw.roles.push({ id: raw.seqRole++, name: "Admin", createdAt: new Date().toISOString(),
-                       createdBy: "System", perms: adminPerms() });
-    }
-    if (!raw.users.some(function (u) { return u.username.toLowerCase() === "admin"; })) {
-      raw.users.push({ id: raw.seqUser, code: "USR-" + pad(raw.seqUser++, 4),
-                       name: "Admin", username: "Admin", password: "12345678",
-                       roleId: byRole("Admin").id, disabled: false,
-                       createdAt: new Date().toISOString() });
-    }
+    if (!isForm) headers["Content-Type"] = "application/json";
 
-    /* a module added in a later version must not silently stay locked */
-    raw.roles.forEach(function (r) {
-      if (r.name === "Super Admin") r.perms = allPerms();
+    return fetch("/api/" + path, {
+      method: method,
+      credentials: "same-origin",
+      headers: headers,
+      body: body === undefined ? undefined : (isForm ? body : JSON.stringify(body))
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = {};
+        try { data = text ? JSON.parse(text) : {}; } catch (e) { /* HTML error page */ }
+
+        if (res.ok) {
+          /* Signing in and out rotates the CSRF token; adopt whatever the
+             server just told us so the next call is not rejected. */
+          if (data.csrf) CSRF = data.csrf;
+          return data;
+        }
+
+        /* 419 means the token went stale — a long-idle tab, or a session
+           rotated in another tab. Re-read it from the page and try once more
+           rather than making the user reload and lose what they typed. */
+        if (res.status === 419 && !retried) {
+          return refreshCsrf().then(function () {
+            return api(method, path, body, true);
+          });
+        }
+
+        /* Laravel puts field errors under `errors`; surface the first one,
+           because that is the sentence that actually tells you what to fix. */
+        var first = data.errors && Object.keys(data.errors).length
+          ? data.errors[Object.keys(data.errors)[0]][0]
+          : null;
+
+        throw new ApiError(
+          first || data.message || ("Request failed (" + res.status + ")"),
+          res.status,
+          data.errors
+        );
+      });
     });
   }
 
-  function seedRoles() {
-    var now = new Date().toISOString();
-    return [
-      { id: 1, name: "Super Admin", createdAt: now, createdBy: "System", perms: allPerms() },
-      { id: 2, name: "Admin", createdAt: now, createdBy: "System", perms: adminPerms() },
-      // { id: 3, name: "Store Manager", createdAt: now, createdBy: "System", perms: {
-      //     variable: true, product: true, barcode: true, customer: true,
-      //     sales: true, "return": true, repSummary: true, repDate: true,
-      //     userAccess: false, roleAccess: false } },
-      // { id: 4, name: "Sales Operator", createdAt: now, createdBy: "System", perms: {
-      //     variable: false, product: false, barcode: false, customer: true,
-      //     sales: true, "return": true, repSummary: false, repDate: false,
-      //     userAccess: false, roleAccess: false } }
-    ];
-  }
-  function seedUsers() {
-    var now = new Date().toISOString();
-    return [
-      { id: 1, code: "USR-0001", name: "Md Shazid", username: "mdshazid",
-        password: "123456", roleId: 1, disabled: false, createdAt: now },
-      { id: 2, code: "USR-0002", name: "Admin", username: "Admin",
-        password: "12345678", roleId: 2, disabled: false, createdAt: now }
-    ];
+  function refreshCsrf() {
+    return fetch("/", { credentials: "same-origin" })
+      .then(function (r) { return r.text(); })
+      .then(function (html) {
+        var m = html.match(/name="csrf-token"\s+content="([^"]+)"/);
+        if (m) CSRF = m[1];
+      })
+      .catch(function () { /* the retry will fail loudly enough on its own */ });
   }
 
-  function seed() {
-    return {
-      variables: [
-        { id: 1, article: "SH-1001", color: "Black", size: "41" },
-        { id: 2, article: "SH-1002", color: "Brown", size: "42" },
-        { id: 3, article: "SH-1003", color: "Tan",   size: "40" },
-        { id: 4, article: "SH-1004", color: "Camel", size: "43" }
-      ],
-      customers: [
-        { id: 1, code: "CUS-0001", name: "Rahim Shoe House", phone: "01711223344",
-          email: "rahim@example.com", address: "Bata Signal, Elephant Road, Dhaka", note: "" }
-      ],
-      products: [],   // one entry per generated barcode
-      sales: [],
-      returns: [],    // customer returns + damage write-offs
-      batch: {},      // { "260815": lastBatchNo }
-      roles: seedRoles(),
-      users: seedUsers(),
-      seqCust: 2, seqVar: 5, seqSale: 1, seqRet: 1, seqRole: 5, seqUser: 3
-    };
+  var GET  = function (p)    { return api("GET", p); };
+  var POST = function (p, b) { return api("POST", p, b || {}); };
+  var PUT  = function (p, b) { return api("PUT", p, b || {}); };
+  var DEL  = function (p)    { return api("DELETE", p); };
+
+  /* One place to turn a rejected call into a message. A dead session ends the
+     app rather than leaving the user clicking against a wall. */
+  function fail(err) {
+    if (err && err.status === 401) { showLogin("Your session has ended. Please sign in again."); return; }
+    toast((err && err.message) || "Something went wrong.", "err");
+  }
+
+  /* Pull the whole dataset and repaint. Used at sign-in and after a reset. */
+  function loadAll() {
+    return GET("bootstrap").then(function (d) {
+      db.articles  = d.articles;
+      db.colors    = d.colors;
+      db.sizes     = d.sizes;
+      db.customers = d.customers;
+      db.products  = d.products;
+      db.sales     = d.sales;
+      db.returns   = d.returns;
+      db.roles     = d.roles;
+      db.users     = d.users;
+      db.nextCode  = d.nextCode;
+      me = d.me;
+      return d;
+    });
+  }
+
+  /* Repaint every screen from the current db. Cheap enough to just do it all
+     after a mutation, and it keeps the stats and cross-page counts honest. */
+  function renderAll() {
+    fillArticleSelects(); fillCustomerSelect(); fillRoleSelect(); syncArticleField();
+    renderVars(); renderRecent(); renderCust(); renderCart(); renderSales();
+    renderRetCart(); renderReturns(); renderSheet();
+    renderStockSummary(); renderByDate();
+    renderUsers(); renderRoles();
+    updateChip();
   }
 
   /* ── helpers ─────────────────────────────────────────── */
@@ -155,15 +159,32 @@
            ", " + d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
   }
   /* Leather shades the browser has no colour name for */
-  function colorDot(c) {
-    var named = {
-      "navy blue": "#1f3a93", olive: "#6b7a3a", maroon: "#7b2233",
-      grey: "#8a8a8a", gray: "#8a8a8a", tan: "#b0743f", camel: "#c19a6b",
-      coffee: "#4b3621", cherry: "#6e2639", beige: "#e3d3b8",
-      brown: "#6b4226", black: "#1a1a1a"
+  var NAMED_SHADES = {
+    "navy blue": "#1f3a93", olive: "#6b7a3a", maroon: "#7b2233",
+    grey: "#8a8a8a", gray: "#8a8a8a", tan: "#b0743f", camel: "#c19a6b",
+    coffee: "#4b3621", cherry: "#6e2639", beige: "#e3d3b8",
+    brown: "#6b4226", black: "#1a1a1a"
+  };
+
+  /* Colours are typed freely now, so most names will be ones this list has
+     never heard of. Ask the browser whether it can paint the name, and fall
+     back to a neutral chip rather than an invisible one. */
+  var paintable = (function () {
+    var probe = document.createElement("span"), cache = {};
+    return function (name) {
+      if (!(name in cache)) {
+        probe.style.color = "";
+        probe.style.color = name;
+        cache[name] = probe.style.color !== "";
+      }
+      return cache[name];
     };
-    var k = String(c).toLowerCase();
-    return named[k] || k;
+  })();
+
+  function colorDot(c) {
+    var k = String(c == null ? "" : c).trim().toLowerCase();
+    if (NAMED_SHADES[k]) return NAMED_SHADES[k];
+    return paintable(k) ? k : "#c9bcae";
   }
 
   function statusBadge(p) {
@@ -182,49 +203,26 @@
     toastTimer = setTimeout(function () { t.className = "toast " + (kind || ""); }, 2600);
   }
 
-  /* Barcode number: YYMMDD + batch (batch restarts per-day counter is
-     continuous per date key, starting at 1 for the first entry of that day). */
-  function nextBarcode(dateKey, peek) {
-    var last = db.batch[dateKey] || 0;
-    var n = last + 1;
-    if (!peek) db.batch[dateKey] = n;
-    return dateKey + pad(n, 4);
-  }
+  /* The barcode counter now lives in the database — two terminals generating
+     at the same moment must not mint the same code, and only the server can
+     guarantee that. `db.nextCode` is whatever the last response told us. */
 
   /* ══ AUTH & PERMISSIONS ════════════════════════════════ */
-  var me = null;   // the signed-in user, or null
+  /* The signed-in user, as the server describes them. The session itself is a
+     cookie the browser never reads — nothing here can grant access on its own,
+     it only decides what to draw. Every route is checked again server-side. */
+  var me = null;
 
-  function roleOf(u) {
-    return u && db.roles.find(function (r) { return r.id === u.roleId; });
-  }
-  /* No session means the login screen is up, so nothing is reachable. */
   function can(key) {
-    if (!me) return false;
-    var r = roleOf(me);
-    return !!(r && r.perms && r.perms[key]);
+    return !!(me && me.perms && me.perms[key]);
   }
   /* Wiping the whole database is a Super Admin-only lever. */
   function isSuperAdmin() {
-    var r = roleOf(me);
-    return !!(r && r.name === "Super Admin");
+    return !!(me && me.roleName === "Super Admin");
   }
   function firstAllowed() {
     var m = MODULES.find(function (x) { return can(x.key); });
     return m ? m.key : "variable";
-  }
-
-  function readSession() {
-    try {
-      var id = JSON.parse(localStorage.getItem(SKEY));
-      var u = db.users.find(function (x) { return x.id === id; });
-      return (u && !u.disabled) ? u : null;   // disabling someone ends their session
-    } catch (e) { return null; }
-  }
-  function writeSession(u) {
-    try {
-      if (u) localStorage.setItem(SKEY, JSON.stringify(u.id));
-      else   localStorage.removeItem(SKEY);
-    } catch (e) {}
   }
 
   /* Hide every nav entry the role cannot open, and collapse a group whose
@@ -239,45 +237,64 @@
       var any = g[1].some(can);
       $(g[0]).style.display = any ? "" : "none";
     });
-    var r = roleOf(me);
-    $("#whoAmI").textContent = me ? me.name + " · " + (r ? r.name : "No role") : "";
+    /* The Add Product shortcuts open the Product Variable modals, so they
+       follow that module's access, not this page's — and Edit carries the
+       extra Super Admin rule that renaming an article has everywhere. */
+    $("#productListShortcuts").style.display = can("variable") ? "" : "none";
+    $("#editArticleBtn").style.display = isSuperAdmin() ? "" : "none";
+
+    var who = me ? me.name + " · " + (me.roleName || "No role") : "";
+    $("#whoAmI").textContent = who;
+    $("#whoAmISide").textContent = who;
     $("#resetData").style.display = isSuperAdmin() ? "" : "none";
   }
 
   function showLogin(msg) {
-    me = null; writeSession(null);
+    me = null;
     $("#loginErr").textContent = msg || "";
     $("#loginScreen").classList.add("show");
     document.body.classList.add("locked");
     $("#loginPass").value = "";
     setTimeout(function () { $("#loginUser").focus(); }, 60);
   }
-  function enterApp(u) {
-    me = u; writeSession(u);
+
+  /* Called once the server has confirmed a session and handed over the data. */
+  function enterApp(greet) {
     $("#loginScreen").classList.remove("show");
     document.body.classList.remove("locked");
     applyPermsToNav();
+    renderAll();
+
+    /* A page the role can no longer open must not be restored into. */
     var p = savedPage();
+    if (!can(p)) p = firstAllowed();
     applyPage(p); refreshPage(p);
-    toast("Welcome back, " + u.name + ".", "ok");
+    seedHistory(p);
+
+    if (greet) toast("Welcome back, " + me.name + ".", "ok");
   }
 
   $("#loginForm").addEventListener("submit", function (e) {
     e.preventDefault();
-    var id = $("#loginUser").value.trim().toLowerCase();
-    var pw = $("#loginPass").value;
-    var u = db.users.find(function (x) { return x.username.toLowerCase() === id; });
-    if (!u || u.password !== pw) { $("#loginErr").textContent = "Wrong user ID or password."; return; }
-    if (u.disabled) { $("#loginErr").textContent = "This account is disabled. Ask an admin to enable it."; return; }
-    var r = roleOf(u);
-    if (!r) { $("#loginErr").textContent = "This account has no role assigned."; return; }
+    var btn = $("#loginForm button[type=submit]");
     $("#loginErr").textContent = "";
-    enterApp(u);
+    btn.disabled = true;
+
+    POST("login", {
+      username: $("#loginUser").value.trim(),
+      password: $("#loginPass").value
+    })
+      .then(loadAll)
+      .then(function () { enterApp(true); })
+      .catch(function (err) {
+        $("#loginErr").textContent = (err && err.message) || "Could not sign in.";
+      })
+      .then(function () { btn.disabled = false; });
   });
 
   $("#logoutBtn").addEventListener("click", function () {
     if (!confirm("Sign out of StockFlow?")) return;
-    showLogin("");
+    doLogout();
   });
 
   /* ── navigation ──────────────────────────────────────── */
@@ -290,6 +307,30 @@
   /* which collapsible group a sub-page lives under */
   var GROUP_OF = { repSummary: "#reportGroup", repDate: "#reportGroup",
                    userAccess: "#permGroup",  roleAccess: "#permGroup" };
+  /* ── mobile nav drawer ───────────────────────────────── */
+  /* Below 980px the sidebar slides in over the page instead of sitting beside
+     it. The class lives on .app so the CSS can move the drawer and fade the
+     scrim together; on wider screens none of it applies. */
+  function setNav(open) {
+    $(".app").classList.toggle("nav-open", open);
+    $("#navToggle").setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  function closeNav() { setNav(false); }
+
+  $("#navToggle").addEventListener("click", function () {
+    setNav(!$(".app").classList.contains("nav-open"));
+  });
+  $("#navScrim").addEventListener("click", closeNav);
+
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") closeNav();
+  });
+
+  /* A drawer that stays open over the page you just opened is in the way. */
+  window.addEventListener("resize", function () {
+    if (window.innerWidth > 980) closeNav();
+  });
+
 
   $("#reportToggle").addEventListener("click", function () {
     $("#reportGroup").classList.toggle("open");
@@ -299,10 +340,36 @@
   });
   var PAGE_KEY = "stockflow.page";
 
-  function savedPage() {
+  /* A real screen in this build. Says nothing about whether the signed-in
+     role may open it — that needs `me`, which is not loaded at boot. */
+  function existsPage(p) {
+    return !!(p && TITLES[p] && $("#page-" + p));
+  }
+
+  function usable(p) {
+    return existsPage(p) && can(p);
+  }
+
+  /* Where the browser was last, from the URL first and the remembered page
+     second. No permission test, so this is answerable before /api/me — which
+     is the whole point: the right screen can be painted immediately instead
+     of after two round trips. */
+  function rememberedPage() {
+    var fromHash = (location.hash || "").replace(/^#/, "");
+    if (existsPage(fromHash)) return fromHash;
+
     var p;
     try { p = localStorage.getItem(PAGE_KEY); } catch (e) {}
-    return (p && TITLES[p] && $("#page-" + p) && can(p)) ? p : firstAllowed();
+    return existsPage(p) ? p : null;
+  }
+
+  /* The URL hash wins over the remembered page: navigating pushes it, so on a
+     reload it is the more specific answer, and it keeps the address bar and
+     the screen telling the same story. */
+  /* The same page, but only if this role may open it. */
+  function savedPage() {
+    var p = rememberedPage();
+    return usable(p) ? p : firstAllowed();
   }
 
   /* Cheap class swap only — safe to run before the boot renders, so the
@@ -324,8 +391,10 @@
     if (p === "sales")  setTimeout(function () { $("#scanInput").focus(); }, 60);
     if (p === "return") setTimeout(function () { $("#retScan").focus(); }, 60);
     if (p === "barcode")    renderSheet();
-    if (p === "repSummary") renderStockSummary();
-    if (p === "repDate")    renderByDate();
+    /* Arriving on a report starts from the prompt, not from whatever range
+       happened to be applied last time. */
+    if (p === "repSummary") clearStockSummary();
+    if (p === "repDate")    clearByDate();
     if (p === "userAccess") renderUsers();
     if (p === "roleAccess") renderRoles();
   }
@@ -335,12 +404,86 @@
     applyPage(p);
     try { localStorage.setItem(PAGE_KEY, p); } catch (e) {}
     refreshPage(p);
+    pushPage(p);   // so Back returns to the screen they came from
   }
+  /* ── browser history ─────────────────────────────────── */
+  /* Each module screen gets its own history entry, so Back and Forward walk
+     the pages the user actually visited instead of leaving the app.
+     Behind the first page sits a guard entry: stepping onto it means there is
+     no earlier screen left, which is where we ask about signing out. */
+  var current = null;
+
+  function pushPage(p) {
+    current = p;
+    try { history.pushState({ sfPage: p }, "", "#" + p); } catch (e) {}
+  }
+
+  /* Lay down guard → first page. Called once the app is on screen.
+     A reload keeps the entry we pushed before it, and the trail behind that
+     entry is still walkable — so adopt it instead of stamping a fresh guard
+     on top, which would make the very next Back look like the end of the
+     line when it is not. */
+  function seedHistory(p) {
+    current = p;
+    try {
+      if (history.state && history.state.sfPage) return;   // resuming a trail
+      history.replaceState({ sfGuard: true }, "", "#");
+      history.pushState({ sfPage: p }, "", "#" + p);
+    } catch (e) {}
+  }
+
+  function doLogout() {
+    POST("logout")
+      .catch(function () { /* the session is going away either way */ })
+      .then(function () {
+        /* Drop the page trail so Back cannot walk into a signed-out app. */
+        try { history.replaceState({ sfGuard: true }, "", "#"); } catch (e) {}
+        current = null;
+        showLogin("");
+      });
+  }
+
+  window.addEventListener("popstate", function (e) {
+    if (document.body.classList.contains("locked")) return;   // already signed out
+
+    var st = e.state;
+    if (st && st.sfPage) {
+      var p = can(st.sfPage) ? st.sfPage : firstAllowed();
+      current = p;
+      try { localStorage.setItem(PAGE_KEY, p); } catch (err) {}
+      applyPage(p); refreshPage(p); closeNav();
+      return;
+    }
+
+    /* Landed on the guard: nothing behind this but leaving the app. Test for
+       the guard itself, never for "no page in the state" — a plain hash edit
+       makes an entry with no state at all, and reading that as the end of the
+       trail put a sign-out prompt in front of anyone who touched the URL. */
+    if (st && st.sfGuard) {
+      if (confirm("No earlier page — do you want to sign out of StockFlow?")) {
+        doLogout();
+      } else if (current) {
+        /* Step back onto the page they were on, so Back is a no-op. */
+        pushPage(current);
+      }
+      return;
+    }
+
+    /* A same-document navigation this app did not create — the hash typed or
+       edited by hand. Follow it when it names a page the role can open, and
+       otherwise leave the screen exactly as it is. */
+    var to = rememberedPage();
+    if (to && can(to) && to !== current) {
+      current = to;
+      try { localStorage.setItem(PAGE_KEY, to); } catch (err) {}
+      applyPage(to); refreshPage(to); closeNav();
+    }
+  });
 
   $$(".nav-item").forEach(function (btn) {
     var p = btn.dataset.page;
     if (!p) return;                     // parent toggle handled above
-    btn.addEventListener("click", function () { goPage(p); });
+    btn.addEventListener("click", function () { goPage(p); closeNav(); });
   });
 
   /* ── modals ──────────────────────────────────────────── */
@@ -356,73 +499,387 @@
   });
 
   /* ══ 1. PRODUCT VARIABLE ═══════════════════════════════ */
-  $("#openVarModal").addEventListener("click", function () {
-    $("#varForm").reset(); resync();
-    openModal("#varModal"); setTimeout(function () { $("#vArticle").focus(); }, 60);
+
+  /* ── the three master lists ──────────────────────────── */
+  /* Articles, colours and sizes are what Add Product offers. They are three
+     independent lists, not a fixed set of combinations: any article can be
+     stocked in any colour in any size, which is how the shop actually buys.
+     All three behave identically, so the wiring is written once. */
+
+  var LISTS = {
+    articles: { noun: "article", plural: "articles" },
+    colors:   { noun: "colour",  plural: "colours", dot: true },
+    sizes:    { noun: "size",    plural: "sizes" }
+  };
+
+  function labelsOf(key) {
+    return db[key].map(function (x) { return x.label; });
+  }
+
+  /* Chips for a modal's "on the list now" pool. Articles have no pool — the
+     Article List table behind the modal already serves that purpose. */
+  function renderPool(key) {
+    var cfg = LISTS[key];
+    var pool = $("#" + key.replace(/s$/, "") + "Pool");
+    if (!pool) return;
+
+    var canEdit = isSuperAdmin();
+
+    pool.innerHTML = db[key].length
+      ? db[key].map(function (x) {
+          return '<span class="combo-chip">' + esc(x.label) +
+            (canEdit ? '<button type="button" class="combo-chip-x" data-del-list="' + key +
+                       '" data-id="' + x.id + '" aria-label="Remove ' + esc(x.label) +
+                       '">&times;</button>' : "") +
+          '</span>';
+        }).join("")
+      : '<span class="hint" style="margin:0">Nothing on the list yet.</span>';
+
+    $("#" + key.replace(/s$/, "") + "PoolHint").textContent = canEdit
+      ? "A " + cfg.noun + " already used by a barcode cannot be removed."
+      : "Only a Super Admin can remove a " + cfg.noun + ".";
+  }
+
+  /* Everything that has to repaint when one of the lists changes. */
+  function listsChanged() {
+    renderPool("colors"); renderPool("sizes");
+    renderVars(); fillArticleSelects(); syncArticleField(); resync();
+  }
+
+  function removeFromList(key, id) {
+    var row = db[key].find(function (x) { return x.id === id; });
+    if (!row) return;
+    if (!confirm('Remove "' + row.label + '" from the ' + LISTS[key].noun + ' list?')) return;
+
+    DEL(key + "/" + id).then(function (d) {
+      db[key] = d[key];
+      listsChanged();
+      toast(row.label + " removed.");
+    }).catch(fail);
+  }
+
+  /* One delegated handler covers every pool, and the article table reuses the
+     same data attributes. */
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-del-list]");
+    if (!btn) return;
+    e.preventDefault();
+    removeFromList(btn.dataset.delList, +btn.dataset.id);
   });
 
-  $("#varForm").addEventListener("submit", function (e) {
-    e.preventDefault();
-    var article = $("#vArticle").value.trim();
-    var dupe = db.variables.some(function (v) {
-      return v.article.toLowerCase() === article.toLowerCase() &&
-             v.color.toLowerCase() === $("#vColor").value.trim().toLowerCase() &&
-             v.size === $("#vSize").value;
-    });
-    if (dupe) { toast("This article / color / size combination already exists.", "err"); return; }
+  /* Wire an "add to this list" form: a chip input plus its submit. */
+  function wireListForm(key, formId, comboRef, closeAfter) {
+    $(formId).addEventListener("submit", function (e) {
+      e.preventDefault();
 
-    db.variables.push({
-      id: db.seqVar++, article: article,
-      color: $("#vColor").value.trim(), size: $("#vSize").value
+      var combo = comboRef();
+      combo.commit();          // a value typed but not yet chipped still counts
+      var values = combo.values();
+
+      if (!values.length) {
+        toast("Add at least one " + LISTS[key].noun + ".", "err");
+        combo.focus();
+        return;
+      }
+
+      /* A staged image forces multipart; without one the plain JSON body is
+         the simpler thing to send. */
+      var body;
+      if (key === "articles" && addImage.file()) {
+        body = new FormData();
+        values.forEach(function (v) { body.append("articles[]", v); });
+        body.append("image", addImage.file());
+      } else {
+        body = {};
+        body[key] = values;
+      }
+
+      POST(key, body).then(function (d) {
+        db[key] = d[key];
+        combo.clear();
+        if (key === "articles") addImage.reset();
+        listsChanged();
+        if (closeAfter) closeModal($(closeAfter));
+
+        var n = d.added.length;
+        var msg = n + " " + (n === 1 ? LISTS[key].noun : LISTS[key].plural) + " added";
+        if (d.skipped.length) msg += " · " + d.skipped.length + " already on the list";
+        toast(msg + ".", "ok");
+      }).catch(fail);
     });
-    save(); closeModal($("#varModal")); renderVars(); fillArticleSelects();
-    toast("Variable added.", "ok");
+  }
+
+  /* The combos are built in initCombos(), after this runs, so the forms reach
+     them lazily rather than capturing an undefined. */
+  var articleCombo, newColorCombo, newSizeCombo;
+
+  wireListForm("articles", "#varForm", function () { return articleCombo; }, "#varModal");
+  wireListForm("colors", "#colorForm", function () { return newColorCombo; });
+  wireListForm("sizes", "#sizeForm", function () { return newSizeCombo; });
+
+  /* Both the Product Variable page and Add Product open these, so the
+     opening lives in one place and the buttons just call it. */
+  function openArticleAdd() {
+    $("#varForm").reset();
+    if (articleCombo) articleCombo.clear();
+    addImage.reset();   // form.reset() clears the input but not the preview
+    resync();
+    openModal("#varModal");
+    setTimeout(function () { articleCombo.focus(); }, 60);
+  }
+
+  /* No autofocus on the colour and size lists: focusing the add field opens
+     its suggestion panel, which has to drop upwards in a short modal and then
+     covers the very list the modal exists to show. */
+  function openColorAdd() {
+    $("#colorForm").reset();
+    if (newColorCombo) newColorCombo.clear();
+    renderPool("colors"); resync();
+    openModal("#colorModal");
+  }
+
+  $("#openVarModal").addEventListener("click", openArticleAdd);
+
+  /* Add Product edits the article its own field is holding. */
+  $("#editArticleBtn").addEventListener("click", function () {
+    var a = currentArticle();
+    if (a) openArticleEdit(a.id);
+  });
+  $("#openColorModal").addEventListener("click", openColorAdd);
+  $("#openColorModal2").addEventListener("click", openColorAdd);
+
+  $("#openSizeModal").addEventListener("click", function () {
+    $("#sizeForm").reset();
+    if (newSizeCombo) newSizeCombo.clear();
+    renderPool("sizes"); resync();
+    openModal("#sizeModal");
   });
 
   $("#varSearch").addEventListener("input", renderVars);
+  /* ── article images ──────────────────────────────────── */
+  /* Optional photo per article. Two screens need the same picker — the add
+     modal and the edit modal — so it is built once per prefix. */
+  var MAX_IMAGE = 4 * 1024 * 1024;
 
-  function renderVars() {
-    var q = $("#varSearch").value.trim().toLowerCase();
-    var rows = db.variables.filter(function (v) {
-      return !q || (v.article + " " + v.color + " " + v.size).toLowerCase().indexOf(q) > -1;
+  function badImage(file) {
+    if (!file) return "No file chosen.";
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return "Choose a JPG, PNG or WebP image.";
+    if (file.size > MAX_IMAGE) return "That image is over 4 MB. Choose a smaller one.";
+    return null;
+  }
+
+  /**
+   * Wire a drop zone. `p` is the id prefix: p+"Image" is the hidden file
+   * input, p+"ImageDrop" the visible box, and so on.
+   *
+   * Returns { file, cleared, reset, showUrl } — `cleared` distinguishes
+   * "left the existing photo alone" from "asked for it to be removed", which
+   * the edit form has to tell the server apart.
+   */
+  function imagePicker(p) {
+    var input = $("#" + p + "Image"),
+        box   = $("#" + p + "ImageDrop"),
+        img   = $("#" + p + "ImagePreview"),
+        empty = $("#" + p + "ImageEmpty"),
+        clear = $("#" + p + "ImageClear");
+
+    var file = null, cleared = false;
+
+    function paint(src) {
+      if (img.src.slice(0, 5) === "blob:") URL.revokeObjectURL(img.src);
+      if (src) {
+        img.src = src;
+        img.hidden = false; empty.hidden = true; clear.hidden = false;
+      } else {
+        img.removeAttribute("src");
+        img.hidden = true; empty.hidden = false; clear.hidden = true;
+      }
+    }
+
+    function choose(f) {
+      if (!f) return;
+      var err = badImage(f);
+      if (err) { toast(err, "err"); return; }
+      file = f; cleared = false;
+      paint(URL.createObjectURL(f));
+    }
+
+    box.addEventListener("click", function (e) {
+      if (e.target.closest("#" + p + "ImageClear")) return;   // the × has its own job
+      input.click();
+    });
+    box.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); }
+    });
+    input.addEventListener("change", function () { choose(this.files[0]); });
+
+    clear.addEventListener("click", function (e) {
+      e.stopPropagation();
+      file = null; cleared = true; input.value = "";
+      paint(null);
     });
 
-    $("#varBody").innerHTML = rows.length ? rows.map(function (v) {
-      return '<tr>' +
-        '<td class="mono" style="color:var(--accent)">' + esc(v.article) + '</td>' +
-        '<td><span class="swatch"><i style="background:' + esc(colorDot(v.color)) + '"></i>' + esc(v.color) + '</span></td>' +
-        '<td><span class="badge">' + esc(v.size) + '</span></td>' +
-        '<td><button class="btn btn-danger btn-sm" data-del-var="' + v.id + '">Delete</button></td>' +
-      '</tr>';
-    }).join("") :
-      '<tr><td colspan="4"><div class="empty">No variables yet. Use <b>Add Variable</b> to create one.</div></td></tr>';
+    /* Dropping a file on the box is the other way people expect to do this. */
+    ["dragenter", "dragover"].forEach(function (ev) {
+      box.addEventListener(ev, function (e) { e.preventDefault(); box.classList.add("dragover"); });
+    });
+    ["dragleave", "drop"].forEach(function (ev) {
+      box.addEventListener(ev, function (e) { e.preventDefault(); box.classList.remove("dragover"); });
+    });
+    box.addEventListener("drop", function (e) {
+      choose(e.dataTransfer.files && e.dataTransfer.files[0]);
+    });
 
-    $("#varCount").textContent = rows.length + " articles";
-    $("#statVars").textContent = db.variables.length;
-    $("#statColors").textContent = new Set(db.variables.map(function (v) { return v.color.toLowerCase(); })).size;
-    $("#statSizes").textContent  = new Set(db.variables.map(function (v) { return v.size; })).size;
+    return {
+      file: function () { return file; },
+      cleared: function () { return cleared; },
+      /* Start from nothing, or from the photo the article already has. */
+      reset: function (url) {
+        file = null; cleared = false; input.value = "";
+        paint(url || null);
+      }
+    };
+  }
+
+  var addImage  = imagePicker("v");     // the Add Articles modal
+  var editImage = imagePicker("ev");    // the Edit Article modal
+  /* ── edit one article ────────────────────────────────── */
+  /* Renaming rewrites what already-printed barcodes claim, so this is Super
+     Admin only — the server checks it again. */
+  var editingArticle = null;
+
+  function openArticleEdit(id) {
+    var a = db.articles.find(function (x) { return x.id === id; });
+    if (!a) return;
+
+    editingArticle = a;
+    $("#evArticle").value = a.label;
+    editImage.reset(a.image);
+
+    var n = db.products.filter(function (p) { return p.article === a.label; }).length;
+    $("#evArticleHint").textContent = n
+      ? "Renaming also updates the " + n + " barcode" + (n === 1 ? "" : "s") + " already made for it."
+      : "No stock has been generated for this article yet.";
+
+    openModal("#varEditModal");
+    setTimeout(function () { $("#evArticle").focus(); }, 60);
   }
 
   $("#varBody").addEventListener("click", function (e) {
-    var id = e.target.dataset && e.target.dataset.delVar;
-    if (!id) return;
-    db.variables = db.variables.filter(function (v) { return v.id !== +id; });
-    save(); renderVars(); fillArticleSelects(); toast("Variable removed.");
+    var btn = e.target.closest("[data-edit-article]");
+    if (btn) openArticleEdit(+btn.dataset.editArticle);
   });
 
-  /* ══ 2. ADD PRODUCT ════════════════════════════════════ */
-  function fillArticleSelects() {
-    /* Add Product picks from the master variable list… */
-    var opts = db.variables.map(function (v) {
-      return '<option value="' + v.id + '" data-dot="' + esc(colorDot(v.color)) + '">' +
-             esc(v.article) + ' · ' + esc(v.color) + ' / ' + esc(v.size) +
-             '</option>';
-    }).join("");
-    var keepArt = $("#pArticle").value;
-    $("#pArticle").innerHTML = '<option value="">— select from Product Variable —</option>' + opts;
-    $("#pArticle").value = keepArt;   // survive a rebuild after generating
+  $("#varEditForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (!editingArticle) return;
 
-    /* …but the filters only offer articles that actually have stock entries,
+    var label = $("#evArticle").value.trim();
+    if (!label) { toast("The article number cannot be empty.", "err"); return; }
+
+    /* Always multipart: the picker may be carrying a file, and one shape for
+       both cases keeps the server reading it the same way every time. */
+    var form = new FormData();
+    form.append("label", label);
+    if (editImage.file()) form.append("image", editImage.file());
+    if (editImage.cleared()) form.append("remove_image", "1");
+
+    POST("articles/" + editingArticle.id, form).then(function (d) {
+      db.articles = d.articles;
+
+      /* Products carry the article as text and the server just rewrote them,
+         so the local copy has to follow or the reports show the old name. */
+      if (d.renamed) {
+        db.products.forEach(function (p) {
+          if (p.article === d.renamed.from) p.article = d.renamed.to;
+        });
+        /* Add Product may be sitting on the old spelling — leaving it there
+           would strand the field on a name the list no longer has. */
+        if ($("#pArticle").value.trim().toLowerCase() === d.renamed.from.toLowerCase()) {
+          $("#pArticle").value = d.renamed.to;
+        }
+      }
+
+      closeModal($("#varEditModal"));
+      editingArticle = null;
+      listsChanged(); renderRecent(); renderSheet();
+
+      toast("Article saved" + (d.moved ? " · " + d.moved + " barcode(s) renamed" : "") + ".", "ok");
+    }).catch(fail);
+  });
+
+  /* The Article List: the master article numbers, with how much stock each
+     one accounts for. Colours and sizes live in their own modals. */
+  function renderVars() {
+    var q = $("#varSearch").value.trim().toLowerCase();
+    var rows = db.articles.filter(function (a) {
+      return !q || a.label.toLowerCase().indexOf(q) > -1;
+    });
+
+    /* Barcodes record the article as text, so stock is counted by label. */
+    var stock = {};
+    db.products.forEach(function (p) {
+      stock[p.article] = (stock[p.article] || 0) + 1;
+    });
+
+    var mayManage = isSuperAdmin();
+
+    $("#varBody").innerHTML = rows.length ? rows.map(function (a) {
+      var n = stock[a.label] || 0;
+      /* A picture, not a control — Edit is where it gets changed, and one
+         way in is less to explain than two. */
+      var thumb = '<span class="thumb">' +
+        (a.image
+          ? '<img src="' + esc(a.image) + '" alt="' + esc(a.label) + '">'
+          : '<svg viewBox="0 0 24 24"><path d="M21 15V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z"/><path d="M3 16l5-5 4 4"/><circle cx="15" cy="8" r="1.4"/></svg>') +
+        '</span>';
+
+      return '<tr>' +
+        '<td>' + thumb + '</td>' +
+        '<td class="mono" style="color:var(--accent)">' + esc(a.label) + '</td>' +
+        '<td class="num' + (n ? '' : ' z') + '">' + n + '</td>' +
+        '<td>' +
+          '<div class="row-actions">' +
+            (mayManage
+              ? '<button class="btn btn-ghost btn-sm" data-edit-article="' + a.id + '">Edit</button>' +
+                '<button class="btn btn-danger btn-sm" data-del-list="articles"' +
+                ' data-id="' + a.id + '">Delete</button>'
+              : "") +
+          '</div>' +
+        '</td>' +
+      '</tr>';
+    }).join("") :
+      '<tr><td colspan="4"><div class="empty">' +
+      (db.articles.length ? "No article matches that search."
+                          : "No articles yet. Use <b>Add Article</b> to create one.") +
+      '</div></td></tr>';
+
+    $("#varCount").textContent = rows.length + " article" + (rows.length === 1 ? "" : "s");
+    $("#statVars").textContent   = db.articles.length;
+    $("#statColors").textContent = db.colors.length;
+    $("#statSizes").textContent  = db.sizes.length;
+  }
+  /* ══ 2. ADD PRODUCT ════════════════════════════════════ */
+  /* Article and colour are typed, with the master lists offered as
+     suggestions; typing something new is how it joins the list, because the
+     server records whatever is submitted. Size is picked from its list. */
+
+  /* Replace a select's options, keeping the current pick when it survives. */
+  function setOptions(sel, values, placeholder, dots) {
+    var keep = sel.value;
+    sel.innerHTML = '<option value="">' + placeholder + '</option>' +
+      values.map(function (v) {
+        return '<option value="' + esc(v) + '"' +
+               (dots ? ' data-dot="' + esc(colorDot(v)) + '"' : "") +
+               '>' + esc(v) + '</option>';
+      }).join("");
+    sel.value = values.indexOf(keep) > -1 ? keep : "";
+  }
+
+  function fillArticleSelects() {
+    setOptions($("#pSize"), labelsOf("sizes"), "— select a size —");
+
+    /* The report filters only offer articles that actually have stock entries,
        so you can never pick one that returns an empty report. */
     var arts = uniq(db.products.map(function (p) { return p.article; })).sort();
     var artOpts = '<option value="">All articles</option>' +
@@ -437,11 +894,6 @@
   }
 
   /* ── combobox wiring ─────────────────────────────────── */
-  /* Shoe-trade defaults — leather shades and EU shoe sizes */
-  var BASE_COLORS = ["Black", "Brown", "Tan", "Camel", "Coffee", "Cherry",
-                     "Navy Blue", "Grey", "White", "Beige", "Olive", "Maroon"];
-  var BASE_SIZES  = ["38", "39", "40", "41", "42", "43", "44", "45", "46"];
-
   function uniq(list) {
     var seen = {}, out = [];
     list.forEach(function (x) {
@@ -455,61 +907,134 @@
     $$(".combo-hidden").forEach(function (h) { if (h._combo) h._combo.sync(); });
   }
 
+  function articleSuggestions() { return labelsOf("articles"); }
+  function colorSuggestions()   { return labelsOf("colors"); }
+  function sizeSuggestions()    { return labelsOf("sizes"); }
+
   function initCombos() {
-    Combo.fromInput($("#vColor"), function () {
-      return uniq(db.variables.map(function (v) { return v.color; }).concat(BASE_COLORS));
-    }, { dot: colorDot });
+    /* The three "add to the master list" fields. Each suggests what is
+       already on its own list, so a near-duplicate is easy to spot. */
+    articleCombo  = Combo.multiFromInput($("#vArticle"), articleSuggestions);
+    newColorCombo = Combo.multiFromInput($("#newColors"), colorSuggestions, { dot: colorDot });
+    newSizeCombo  = Combo.multiFromInput($("#newSizes"), sizeSuggestions);
 
-    Combo.fromInput($("#vSize"), function () {
-      return uniq(db.variables.map(function (v) { return v.size; }).concat(BASE_SIZES))
-        .sort(function (a, b) {
-          var na = parseFloat(a), nb = parseFloat(b);
-          var aNum = !isNaN(na), bNum = !isNaN(nb);
-          if (aNum && bNum) return nb - na;
-          if (aNum) return -1;
-          if (bNum) return 1;
-          return String(b).localeCompare(String(a));
-        });
-    });
+    /* Add Product. Article and colour accept anything typed; size is picked. */
+    Combo.fromInput($("#pArticle"), articleSuggestions);
+    Combo.fromInput($("#pColor"), colorSuggestions, { dot: colorDot });
 
-    ["#pArticle", "#sCustomer", "#bArticle", "#bStatus", "#rType",
-     "#ssArticle", "#bdArticle", "#bdType"].forEach(function (sel) {
+    ["#pSize", "#sCustomer", "#bArticle", "#bStatus",
+     "#rType", "#ssArticle", "#bdArticle", "#bdType"].forEach(function (sel) {
       Combo.fromSelect($(sel));
     });
   }
 
-  $("#pArticle").addEventListener("change", function () {
-    var v = db.variables.find(function (x) { return x.id === +this.value; }, this);
-    $("#pColor").value = v ? v.color : "";
-    $("#pSize").value  = v ? v.size  : "";
-  });
+  /* ── the article photo on Add Product ────────────────── */
+  /* Sits at the head of the Article No field, so whoever is generating
+     barcodes can see they picked the shoe they meant. The combo widget wraps
+     the input at init time, so the slot goes in afterwards. */
+  var NO_PHOTO_SVG =
+    '<svg viewBox="0 0 24 24"><path d="M21 15V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z"/>' +
+    '<path d="M3 16l5-5 4 4"/><circle cx="15" cy="8" r="1.4"/></svg>';
+
+  function initArticleThumb() {
+    var wrap = $("#pArticle").closest(".combo");
+    if (!wrap) return;
+
+    var slot = document.createElement("span");
+    slot.className = "field-thumb";
+    slot.id = "pArticleThumb";
+    wrap.insertBefore(slot, wrap.firstChild);
+    wrap.classList.add("has-thumb");
+
+    /* "change" covers picking from the list, "input" covers typing — the
+       combo only fires the first, and a typed name can match too. */
+    wrap.addEventListener("input", syncArticleField);
+    $("#pArticle").addEventListener("change", syncArticleField);
+
+    syncArticleField();
+  }
+
+  /* Whichever article the field is naming, or null while it holds something
+     that is not on the list yet. Both the photo and the Edit button hang off
+     this, so the two can never disagree about what is selected. */
+  function currentArticle() {
+    var typed = $("#pArticle").value.trim().toLowerCase();
+    if (!typed) return null;
+    return db.articles.find(function (x) {
+      return x.label.toLowerCase() === typed;
+    }) || null;
+  }
+
+  function syncArticleField() {
+    var a = currentArticle();
+
+    var slot = $("#pArticleThumb");
+    if (slot) {
+      slot.innerHTML = a && a.image
+        ? '<img src="' + esc(a.image) + '" alt="">'
+        : NO_PHOTO_SVG;
+      slot.classList.toggle("is-empty", !(a && a.image));
+    }
+
+    /* Nothing to edit until the name matches something saved — say which of
+       the two it is rather than leaving a dead button. */
+    var btn = $("#editArticleBtn");
+    btn.disabled = !a;
+    btn.title = a
+      ? "Edit " + a.label
+      : ($("#pArticle").value.trim()
+          ? "Save this article first — it is not on the list yet"
+          : "Pick an article to edit it");
+  }
 
   $("#clearProd").addEventListener("click", function () {
-    ["pColor", "pSize", "pPrice", "pRemarks"].forEach(function (id) { $("#" + id).value = ""; });
-    $("#pArticle").value = ""; $("#pQty").value = 1; resync();
+    ["pArticle", "pColor", "pPrice"].forEach(function (id) { $("#" + id).value = ""; });
+    $("#pSize").value = "";
+    $("#pQty").value = 1;
+    resync(); syncArticleField();
     $("#labelPane").innerHTML = '<div class="empty">Cleared — generate a new barcode.</div>';
   });
 
   $("#genBtn").addEventListener("click", function () {
-    var v = db.variables.find(function (x) { return x.id === +$("#pArticle").value; });
-    if (!v) { toast("Select an article from Product Variable first.", "err"); return; }
-    var qty = Math.max(1, parseInt($("#pQty").value, 10) || 1);
-    var price = parseFloat($("#pPrice").value) || 0;
-    var remarks = $("#pRemarks").value.trim();
-    var key = ymd(new Date());
-    var made = [];
+    /* Whatever is typed is the variant. The server reuses the spelling
+       already on file and records anything new, so no lookup is needed here. */
+    var article = $("#pArticle").value.trim();
+    var color   = $("#pColor").value.trim();
+    var size    = $("#pSize").value;
+    if (!article) { toast("Type or pick an article first.", "err"); return; }
+    if (!color)   { toast("Type or pick a color.", "err"); return; }
+    if (!size)    { toast("Select a size.", "err"); return; }
 
-    for (var i = 0; i < qty; i++) {
-      var p = {
-        code: nextBarcode(key), article: v.article, color: v.color,
-        size: v.size, price: price, remarks: remarks, status: "in", at: new Date().toISOString()
-      };
-      db.products.push(p); made.push(p);
-    }
-    save();
-    renderLabel(made);
-    renderRecent(); updateChip(); renderSheet(); fillArticleSelects();
-    toast(qty + " barcode" + (qty > 1 ? "s" : "") + " generated.", "ok");
+    var qty = Math.max(1, parseInt($("#pQty").value, 10) || 1);
+    var btn = $("#genBtn");
+    btn.disabled = true;
+
+    /* The server mints the codes — asking for `qty` reserves that many in one
+       locked step, so a second terminal generating at the same time picks up
+       after this batch instead of colliding with it. */
+    POST("products", {
+      article: article,
+      color:   color,
+      size:    size,
+      qty:     qty,
+      price:   parseFloat($("#pPrice").value) || 0
+    }).then(function (d) {
+      d.products.forEach(function (p) { db.products.push(p); });
+      db.nextCode = d.nextCode;
+      /* Typing a value puts it on a master list, so all three come back. */
+      if (d.articles) db.articles = d.articles;
+      if (d.colors)   db.colors   = d.colors;
+      if (d.sizes)    db.sizes    = d.sizes;
+
+      /* Show the spelling the server settled on, not the raw typing. */
+      var first = d.products[0];
+      if (first) { $("#pArticle").value = first.article; $("#pColor").value = first.color; }
+
+      renderLabel(d.products);
+      renderRecent(); updateChip(); renderSheet(); renderVars();
+      fillArticleSelects(); syncArticleField();
+      toast(qty + " barcode" + (qty > 1 ? "s" : "") + " generated.", "ok");
+    }).catch(fail).then(function () { btn.disabled = false; });
   });
 
   /* One physical 1.5in × 1in label: article / colour / size, then the
@@ -544,7 +1069,6 @@
       '<div class="kv"><span>Barcode Range</span><b class="mono">' +
         esc(first.code) + (n > 1 ? ' – ' + esc(last.code) : "") + '</b></div>' +
       '<div class="kv"><span>Price / Pair</span><b>' + money(first.price) + '</b></div>' +
-      (first.remarks ? '<div class="kv"><span>Remarks</span><b>' + esc(first.remarks) + '</b></div>' : "") +
       '<div class="kv"><span>Total Value</span><b>' + money(first.price * n) + '</b></div>' +
       '<div class="kv"><span>Generated</span><b>' + fmtDT(first.at) + '</b></div>' +
       '<button class="btn btn-ghost btn-block" style="margin-top:16px" id="quickPrint">' +
@@ -569,10 +1093,8 @@
   }
 
   function updateChip() {
-    var key = ymd(new Date());
-    var next = nextBarcode(key, true);
-    $("#nextCodeChip").textContent = "NEXT · " + next;
-    $("#previewCode").textContent = next;
+    $("#nextCodeChip").textContent = "NEXT · " + db.nextCode;
+    $("#previewCode").textContent = db.nextCode;
   }
 
   /* ══ 3. CUSTOMER DETAILS ═══════════════════════════════ */
@@ -582,14 +1104,17 @@
 
   $("#custForm").addEventListener("submit", function (e) {
     e.preventDefault();
-    db.customers.push({
-      id: db.seqCust, code: "CUS-" + pad(db.seqCust++, 4),
-      name: $("#cName").value.trim(), phone: $("#cPhone").value.trim(),
-      email: $("#cEmail").value.trim(), address: $("#cAddr").value.trim(),
-      note: $("#cNote").value.trim()
-    });
-    save(); closeModal($("#custModal")); renderCust(); fillCustomerSelect();
-    toast("Customer added.", "ok");
+    POST("customers", {
+      name:    $("#cName").value.trim(),
+      phone:   $("#cPhone").value.trim(),
+      email:   $("#cEmail").value.trim(),
+      address: $("#cAddr").value.trim(),
+      note:    $("#cNote").value.trim()
+    }).then(function (d) {
+      db.customers.push(d.customer);
+      closeModal($("#custModal")); renderCust(); fillCustomerSelect();
+      toast("Customer added.", "ok");
+    }).catch(fail);
   });
 
   $("#custSearch").addEventListener("input", renderCust);
@@ -628,8 +1153,11 @@
     var d = e.target.dataset || {};
     if (d.histCust) { showHistory(+d.histCust); return; }
     if (!d.delCust) return;
-    db.customers = db.customers.filter(function (c) { return c.id !== +d.delCust; });
-    save(); renderCust(); fillCustomerSelect(); toast("Customer removed.");
+    var cid = +d.delCust;
+    DEL("customers/" + cid).then(function () {
+      db.customers = db.customers.filter(function (c) { return c.id !== cid; });
+      renderCust(); fillCustomerSelect(); toast("Customer removed.");
+    }).catch(fail);
   });
 
   /* ── customer purchase history ───────────────────────── */
@@ -642,6 +1170,41 @@
       return { code: code, article: p.article || "—", color: p.color || "—",
                size: p.size || "—", paid: paid };
     });
+  }
+
+  /* Spread an invoice's discount across its pairs in proportion to price, so
+     each line carries the share of it that the customer really was charged.
+     The last line takes the rounding remainder, which keeps the parts adding
+     up to the invoice total. Mirrors Sale::netByCode() on the server. */
+  function netByCode(s) {
+    var lines = invoiceLines(s);
+    var sub = s.sub != null ? s.sub : lines.reduce(function (a, l) { return a + l.paid; }, 0);
+    var disc = s.discount || 0;
+    var used = 0, out = {};
+
+    lines.forEach(function (l, i) {
+      var share = (i === lines.length - 1)
+        ? Math.round((disc - used) * 100) / 100
+        : Math.round((sub > 0 ? l.paid / sub * disc : 0) * 100) / 100;
+      used += share;
+      out[l.code] = Math.round((l.paid - share) * 100) / 100;
+    });
+
+    return out;
+  }
+
+  /* What the customer actually paid for one pair — the figure a refund uses.
+     A pair can be sold, returned and sold again, so the latest invoice it
+     appears on is the one that counts. */
+  function paidFor(code) {
+    for (var i = db.sales.length - 1; i >= 0; i--) {
+      if (db.sales[i].items.indexOf(code) > -1) {
+        var net = netByCode(db.sales[i])[code];
+        if (net != null) return net;
+      }
+    }
+    var p = pByCode(code);
+    return p ? p.price : 0;      // never sold: nothing was paid for it
   }
 
   function showHistory(custId) {
@@ -699,7 +1262,7 @@
 
     var tot = { price: 0, disc: 0, net: 0 };
     var body = flat.length ?
-      '<table class="hist-table"><thead><tr>' +
+      '<div class="table-wrap"><table class="hist-table"><thead><tr>' +
         '<th style="width:150px">Date</th>' +
         '<th style="width:150px">Barcode</th>' +
         '<th style="width:110px">Article No</th>' +
@@ -732,12 +1295,12 @@
         '<td class="num">' + money(tot.disc) + '</td>' +
         '<td class="num accent"><b>' + money(tot.net) + '</b></td>' +
         '<td></td>' +
-      '</tr></tfoot></table>'
+      '</tr></tfoot></table></div>'
       : '<div class="empty">This customer has not bought anything yet.</div>';
 
     var retBlock = rets.length ?
       '<h4 class="hist-sub">Returns &amp; Damage</h4>' +
-      '<table><thead><tr>' +
+      '<div class="table-wrap"><table><thead><tr>' +
         '<th style="width:150px">Ref No</th><th style="width:110px">Type</th>' +
         '<th style="width:80px" class="num">Pairs</th><th style="width:120px" class="num">Amount</th>' +
         '<th>Reason</th><th style="width:170px">Date</th>' +
@@ -752,7 +1315,7 @@
           '<td>' + esc(r.reason) + '</td>' +
           '<td style="color:var(--txt-dim)">' + fmtDT(r.at) + '</td>' +
         '</tr>';
-      }).join("") + '</tbody></table>' : "";
+      }).join("") + '</tbody></table></div>' : "";
     $("#histTitle").textContent = "Purchase History · " + c.name;
     $("#histBody").innerHTML = head + '<h4 class="hist-sub">Invoices</h4>' + body + retBlock;
     /* keep what the modal is showing so Excel Export writes the same figures */
@@ -860,6 +1423,71 @@
     renderCart(); toast(p.article + " added.", "ok");
   }
 
+
+  /* ── available barcodes ──────────────────────────────── */
+  /* Look a pair up instead of scanning it — for a torn label, or when the
+     box is across the room. Only pairs that can actually be sold appear:
+     anything already out or written off would be refused by addToCart. */
+  function sellableProducts() {
+    var q = $("#stockSearch").value.trim().toLowerCase();
+    return db.products.filter(function (p) {
+      if (p.status !== "in") return false;
+      if (!q) return true;
+      return (p.code + " " + p.article + " " + p.color + " " + p.size)
+        .toLowerCase().indexOf(q) > -1;
+    });
+  }
+
+  function renderStockPicker() {
+    var rows = sellableProducts();
+
+    /* The article photo is on the article, not the pair, so look it up. */
+    var pic = {};
+    db.articles.forEach(function (a) { pic[a.label.toLowerCase()] = a.image; });
+
+    $("#stockBody").innerHTML = rows.length ? rows.map(function (p) {
+      var inCart = cart.indexOf(p.code) > -1;
+      var img = pic[String(p.article).toLowerCase()];
+      return '<tr' + (inCart ? ' class="row-off"' : '') + '>' +
+        '<td><span class="thumb thumb-sm">' +
+          (img ? '<img src="' + esc(img) + '" alt="">' : NO_PHOTO_SVG) +
+        '</span></td>' +
+        '<td class="mono" style="color:var(--accent)">' + esc(p.code) + '</td>' +
+        '<td class="mono">' + esc(p.article) + '</td>' +
+        '<td><span class="swatch"><i style="background:' + esc(colorDot(p.color)) + '"></i>' + esc(p.color) + '</span></td>' +
+        '<td><span class="badge">' + esc(p.size) + '</span></td>' +
+        '<td class="num">' + money(p.price) + '</td>' +
+        '<td>' + (inCart
+          ? '<span class="badge ok">In cart</span>'
+          : '<button class="btn btn-ghost btn-sm" data-pick-code="' + esc(p.code) + '">Add</button>') +
+        '</td>' +
+      '</tr>';
+    }).join("") :
+      '<tr><td colspan="7"><div class="empty">' +
+      ($("#stockSearch").value.trim()
+        ? "Nothing matches that search."
+        : "No pairs in stock. Generate some barcodes on <b>Add Product</b> first.") +
+      '</div></td></tr>';
+
+    $("#stockCount").textContent = rows.length + " available";
+  }
+
+  $("#openStockModal").addEventListener("click", function () {
+    $("#stockSearch").value = "";
+    renderStockPicker();
+    openModal("#stockModal");
+    setTimeout(function () { $("#stockSearch").focus(); }, 60);
+  });
+
+  $("#stockSearch").addEventListener("input", renderStockPicker);
+
+  /* Stay open after adding: picking several in a row is the normal case. */
+  $("#stockBody").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-pick-code]");
+    if (!btn) return;
+    addToCart(btn.dataset.pickCode);
+    renderStockPicker();
+  });
   function priceOf(code) {
     var v = cartPrice[code];
     return isNaN(v) ? 0 : v;
@@ -907,6 +1535,10 @@
       '</tr>';
     }).join("") : '<tr><td colspan="4"><div class="empty">Scan a shoe box barcode to begin.</div></td></tr>';
 
+    /* An open picker has to follow the cart, or its "In cart" marks go
+       stale the moment a row is added or removed. */
+    if ($("#stockModal").classList.contains("open")) renderStockPicker();
+
     cartTotals();
   }
 
@@ -928,31 +1560,40 @@
     var cust = db.customers.find(function (c) { return c.id === +$("#sCustomer").value; });
     if (!cust || !cart.length) return;
 
-    var sub = cart.reduce(function (a, code) {
-      var p = db.products.find(function (x) { return x.code === code; });
-      /* the edited row price is what was actually charged — keep it on the
-         pair so refunds and reports use the real figure, not the label price */
-      p.price = priceOf(code);
-      p.status = "out"; p.soldTo = cust.id; p.soldAt = new Date().toISOString();
-      return a + p.price;
-    }, 0);
-    var disc = Math.min(sub, parseFloat($("#sDiscount").value) || 0);
+    var btn = $("#checkoutBtn");
+    btn.disabled = true;
 
-    db.sales.push({
-      inv: "INV-" + ymd(new Date()) + "-" + pad(db.seqSale++, 3),
-      custId: cust.id, custName: cust.name, items: cart.slice(),
-      /* keep the price charged per pair, plus subtotal and discount, so the
-         history can be rebuilt even after a pair is returned or resold */
-      prices: cart.map(priceOf),
-      sub: sub, discount: disc,
-      total: sub - disc, at: new Date().toISOString()
-    });
-    save();
-    $("#sDiscount").value = 0;
-    clearCart();
-    renderSales(); renderRecent(); renderCust(); renderSheet();
-    toast("Stock out confirmed for " + cust.name + ".", "ok");
+    /* Stock only moves when the server says so. Between scanning a pair and
+       clicking here another terminal may have sold it, and the row lock on
+       the server side is the only thing that can actually catch that. */
+    POST("sales", {
+      customer_id: cust.id,
+      items: cart.map(function (code) { return { code: code, price: priceOf(code) }; }),
+      discount: parseFloat($("#sDiscount").value) || 0
+    }).then(function (d) {
+      db.sales.push(d.sale);
+      applyProducts(d.products);
+
+      $("#sDiscount").value = 0;
+      clearCart();
+      renderSales(); renderRecent(); renderCust(); renderSheet();
+      toast("Stock out confirmed for " + cust.name + ".", "ok");
+    }).catch(function (err) {
+      fail(err);
+      /* A rejected pair means our copy of the stock is stale — pull the truth
+         back rather than leaving the cart claiming something that is gone. */
+      if (err && err.status === 409) loadAll().then(renderAll).catch(fail);
+    }).then(function () { btn.disabled = false; });
   });
+
+  /* Fold server copies of products back into the local mirror. */
+  function applyProducts(list) {
+    (list || []).forEach(function (fresh) {
+      var i = db.products.findIndex(function (p) { return p.code === fresh.code; });
+      if (i > -1) db.products[i] = fresh;
+      else db.products.push(fresh);
+    });
+  }
 
   function renderSales() {
     var rows = db.sales.slice().reverse();
@@ -1028,19 +1669,30 @@
       return db.products.find(function (p) { return p.code === c; });
     }).filter(Boolean);
 
+    /* A refund gives back what the customer paid — the label price minus this
+       pair's share of the invoice discount. A damage write-off is not a
+       refund: it records the stock value lost, which is the full price. */
+    var lineValue = function (p) { return isReturn ? paidFor(p.code) : p.price; };
+
     $("#retCartBody").innerHTML = items.length ? items.map(function (p) {
       var buyer = db.customers.find(function (c) { return c.id === p.soldTo; });
+      var value = lineValue(p);
+      /* Show the label price alongside when the discount made them differ, so
+         the number is explainable at the counter. */
+      var struck = isReturn && value !== p.price
+        ? '<div class="hint"><s>' + p.price.toFixed(2) + '</s> after discount</div>'
+        : "";
       return '<tr>' +
         '<td class="mono" style="color:var(--accent)">' + esc(p.code) + '</td>' +
         '<td><b>' + esc(p.article) + '</b><div class="hint">' + esc(p.color) + ' · ' + esc(p.size) + '</div></td>' +
         '<td>' + (buyer ? esc(buyer.name) : '<span class="badge">In stock</span>') + '</td>' +
-        '<td class="num">' + p.price.toFixed(2) + '</td>' +
+        '<td class="num">' + value.toFixed(2) + struck + '</td>' +
         '<td><button class="btn btn-quiet btn-sm" data-rrm="' + esc(p.code) + '">✕</button></td>' +
       '</tr>';
     }).join("") :
       '<tr><td colspan="5"><div class="empty">Scan the barcode on the returned box to begin.</div></td></tr>';
 
-    var amount = items.reduce(function (a, p) { return a + p.price; }, 0);
+    var amount = items.reduce(function (a, p) { return a + lineValue(p); }, 0);
     var buyers = uniq(items.map(function (p) {
       var c = db.customers.find(function (x) { return x.id === p.soldTo; });
       return c ? c.name : "";
@@ -1065,29 +1717,24 @@
     if (!confirm((isReturn ? "Return " : "Write off ") + retCart.length +
                  " pair(s)? This updates stock immediately.")) return;
 
-    var first = db.products.find(function (x) { return x.code === retCart[0]; });
-    var buyer = db.customers.find(function (c) { return c.id === (first && first.soldTo); });
+    var btn = $("#retConfirm");
+    btn.disabled = true;
 
-    var amount = retCart.reduce(function (a, code) {
-      var p = db.products.find(function (x) { return x.code === code; });
-      if (isReturn) { p.status = "in"; p.returnedFrom = p.soldTo; delete p.soldTo; delete p.soldAt; }
-      else { p.status = "damaged"; }
-      p.lastAt = new Date().toISOString();
-      return a + p.price;
-    }, 0);
-
-    db.returns.push({
-      ref: (isReturn ? "RET-" : "DMG-") + ymd(new Date()) + "-" + pad(db.seqRet++, 3),
+    POST("returns", {
       type: isReturn ? "return" : "damage",
-      custId: buyer ? buyer.id : null, custName: buyer ? buyer.name : "—",
-      reason: $("#rReason").value.trim() || "Not specified",
-      items: retCart.slice(), amount: amount, at: new Date().toISOString()
-    });
-    save();
+      codes: retCart.slice(),
+      reason: $("#rReason").value.trim()
+    }).then(function (d) {
+      db.returns.push(d["return"]);
+      applyProducts(d.products);
 
-    retCart = []; $("#rReason").value = "";
-    renderRetCart(); renderReturns(); renderRecent(); renderCust(); renderSheet();
-    toast(isReturn ? "Return completed — stock updated." : "Damage recorded — pairs written off.", "ok");
+      retCart = []; $("#rReason").value = "";
+      renderRetCart(); renderReturns(); renderRecent(); renderCust(); renderSheet();
+      toast(isReturn ? "Return completed — stock updated." : "Damage recorded — pairs written off.", "ok");
+    }).catch(function (err) {
+      fail(err);
+      if (err && err.status === 409) loadAll().then(renderAll).catch(fail);
+    }).then(function () { btn.disabled = false; });
   });
 
   function renderReturns() {
@@ -1158,10 +1805,12 @@
   $("#resetData").addEventListener("click", function (e) {
     e.preventDefault();
     if (!isSuperAdmin()) { toast("Only a Super Admin can reset the data.", "err"); return; }
-    if (!confirm("Clear all locally stored demo data?")) return;
-    localStorage.removeItem(KEY);
-    localStorage.removeItem(SKEY);
-    location.reload();
+    if (!confirm("This erases every product, sale and return in the database and " +
+                 "restores the starting roles and users. Continue?")) return;
+
+    POST("reset-demo-data")
+      .then(function () { location.reload(); })
+      .catch(fail);
   });
 
   /* ══ 6+7. REPORTS ══════════════════════════════════════ */
@@ -1204,8 +1853,36 @@
     return f(from) + "  →  " + f(to);
   }
 
+  /* ── reports run on demand ───────────────────────────── */
+  /* A report is only drawn once Apply Filter has been pressed, so what is on
+     screen always answers a question the user actually asked. Arriving on the
+     page, or pressing Reset, puts it back to the prompt. */
+  var ssApplied = false, bdApplied = false;
+
+  function reportPrompt(cols) {
+    return '<tr><td colspan="' + cols + '"><div class="empty">' +
+      '<svg viewBox="0 0 24 24"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>' +
+      'Choose a date range, then press <b>Apply Filter</b>.' +
+      '</div></td></tr>';
+  }
+
+  function clearStockSummary() {
+    ssApplied = false;
+    $("#ssBody").innerHTML = reportPrompt(9);
+    $("#ssFoot").innerHTML = "";
+    $("#ssRange").textContent = "Not run";
+  }
+  function clearByDate() {
+    bdApplied = false;
+    $("#bdBody").innerHTML = reportPrompt(6);
+    $("#bdFoot").innerHTML = "";
+    $("#bdRange").textContent = "Not run";
+  }
+
   /* ── 6. Stock Summary ────────────────────────────────── */
   function renderStockSummary() {
+    /* Nothing to draw until the user asks for it. */
+    if (!ssApplied) { clearStockSummary(); return; }
     var from = $("#ssFrom").value, to = $("#ssTo").value, art = $("#ssArticle").value;
     var rows = {};   // key = article|color|size
 
@@ -1273,15 +1950,34 @@
   var PTYPE = { stockin: "Stock In", sold: "Sold", damage: "Damage", "return": "Return" };
 
   function renderByDate() {
+    if (!bdApplied) { clearByDate(); return; }
     var from = $("#bdFrom").value, to = $("#bdTo").value;
     var ty = $("#bdType").value, art = $("#bdArticle").value;
 
-    var list = movements().filter(function (m) {
+    /* movements() yields one entry per event, oldest first. */
+    var events = movements().filter(function (m) {
       if (!inRange(m.at, from, to)) return false;
       if (ty && m.type !== ty) return false;
       if (art && m.p.article !== art) return false;
       return true;
-    }).reverse();
+    });
+
+    /* One row per barcode, not one per event — the report is a stock list,
+       and a pair that was made, sold and then returned is still one pair.
+       Three rows made a single barcode read as three, and the sub-total
+       counted it three times over. What is kept is its last movement in the
+       period: the state that pair ended the period in.
+
+       Deleting before setting moves the barcode to the end of the map, so
+       insertion order stays "oldest last movement first" and the reverse
+       below puts the most recent activity on top. */
+    var latest = new Map();
+    events.forEach(function (m) {
+      latest.delete(m.p.code);
+      latest.set(m.p.code, m);
+    });
+
+    var list = Array.from(latest.values()).reverse();
 
     var tot = { stockin: 0, sold: 0, damage: 0, "return": 0 };
 
@@ -1319,21 +2015,22 @@
     $("#bdRange").textContent = rangeLabel(from, to);
   }
 
-  $("#ssApply").addEventListener("click", renderStockSummary);
-  $("#bdApply").addEventListener("click", renderByDate);
+  $("#ssApply").addEventListener("click", function () { ssApplied = true; renderStockSummary(); });
+  $("#bdApply").addEventListener("click", function () { bdApplied = true; renderByDate(); });
   $("#ssPrint").addEventListener("click", function () { window.print(); });
   $("#bdPrint").addEventListener("click", function () { window.print(); });
 
+  /* Reset clears the filters and the result — it does not silently re-run the
+     report with an empty range. */
   $("#ssReset").addEventListener("click", function () {
     $("#ssFrom").value = ""; $("#ssTo").value = ""; $("#ssArticle").value = "";
-    resync(); renderStockSummary();
+    resync(); clearStockSummary();
   });
   $("#bdReset").addEventListener("click", function () {
     $("#bdFrom").value = ""; $("#bdTo").value = "";
     $("#bdType").value = ""; $("#bdArticle").value = "";
-    resync(); renderByDate();
+    resync(); clearByDate();
   });
-
   /* ══ 9. USER ACCESS ════════════════════════════════════ */
   function fillRoleSelect() {
     $("#uRole").innerHTML = '<option value="">— select role —</option>' +
@@ -1350,7 +2047,7 @@
     });
 
     $("#usrBody").innerHTML = rows.length ? rows.map(function (u) {
-      var r = roleOf(u);
+      var r = db.roles.find(function (x) { return x.id === u.roleId; });
       var self = me && u.id === me.id;
       return '<tr' + (u.disabled ? ' class="row-off"' : "") + '>' +
         '<td class="mono" style="color:var(--accent)">' + esc(u.username) + '</td>' +
@@ -1380,13 +2077,15 @@
     var d = e.target.dataset || {};
     if (d.pass) { openPassModal(+d.pass); return; }
     if (!d.toggleUser) return;
-    var u = db.users.find(function (x) { return x.id === +d.toggleUser; });
-    if (!u) return;
-    /* locking yourself out would need a second admin to undo */
-    if (me && u.id === me.id) { toast("You cannot disable your own account.", "err"); return; }
-    u.disabled = !u.disabled;
-    save(); renderUsers();
-    toast(u.name + (u.disabled ? " disabled." : " enabled."), u.disabled ? "err" : "ok");
+
+    var id = +d.toggleUser;
+    POST("users/" + id + "/toggle").then(function (r) {
+      var i = db.users.findIndex(function (x) { return x.id === id; });
+      if (i > -1) db.users[i] = r.user;
+      renderUsers();
+      toast(r.user.name + (r.user.disabled ? " disabled." : " enabled."),
+            r.user.disabled ? "err" : "ok");
+    }).catch(fail);
   });
 
   $("#openUserModal").addEventListener("click", function () {
@@ -1397,25 +2096,23 @@
   $("#userForm").addEventListener("submit", function (e) {
     e.preventDefault();
     var username = $("#uUser").value.trim();
-    var pass = $("#uPass").value;
-    var roleId = +$("#uRole").value;
 
+    /* Answered locally so the field can be corrected without a round trip;
+       the same rules are enforced again by the request validator. */
     if (!/^[A-Za-z0-9._-]{3,}$/.test(username)) {
       toast("User ID: 3+ characters, letters/numbers/._- only.", "err"); return;
     }
-    if (db.users.some(function (u) { return u.username.toLowerCase() === username.toLowerCase(); })) {
-      toast("That user ID is already taken.", "err"); return;
-    }
-    if (pass.length < 6) { toast("Password must be at least 6 characters.", "err"); return; }
-    if (!roleId) { toast("Pick a role for this user.", "err"); return; }
 
-    db.users.push({
-      id: db.seqUser, code: "USR-" + pad(db.seqUser++, 4),
-      name: $("#uName").value.trim(), username: username, password: pass,
-      roleId: roleId, disabled: false, createdAt: new Date().toISOString()
-    });
-    save(); closeModal($("#userModal")); renderUsers();
-    toast("User created.", "ok");
+    POST("users", {
+      name:     $("#uName").value.trim(),
+      username: username,
+      password: $("#uPass").value,
+      role_id:  +$("#uRole").value
+    }).then(function (d) {
+      db.users.push(d.user);
+      closeModal($("#userModal")); renderUsers();
+      toast("User created.", "ok");
+    }).catch(fail);
   });
 
   /* ── reset password ──────────────────────────────────── */
@@ -1432,11 +2129,12 @@
     e.preventDefault();
     var u = db.users.find(function (x) { return x.id === passUserId; });
     if (!u) return;
-    var pw = $("#pNew").value;
-    if (pw.length < 6) { toast("Password must be at least 6 characters.", "err"); return; }
-    u.password = pw;
-    save(); closeModal($("#passModal"));
-    toast("Password updated for " + u.name + ".", "ok");
+
+    POST("users/" + u.id + "/password", { password: $("#pNew").value })
+      .then(function () {
+        closeModal($("#passModal"));
+        toast("Password updated for " + u.name + ".", "ok");
+      }).catch(fail);
   });
 
   /* ══ 10. ROLE ACCESS ═══════════════════════════════════ */
@@ -1495,9 +2193,11 @@
       return;
     }
     if (!confirm("Delete the role " + r.name + "?")) return;
-    db.roles = db.roles.filter(function (x) { return x.id !== r.id; });
-    save(); renderRoles(); renderUsers(); fillRoleSelect();
-    toast("Role deleted.");
+    DEL("roles/" + r.id).then(function () {
+      db.roles = db.roles.filter(function (x) { return x.id !== r.id; });
+      renderRoles(); renderUsers(); fillRoleSelect();
+      toast("Role deleted.");
+    }).catch(fail);
   });
 
   /* ── add role ────────────────────────────────────────── */
@@ -1511,19 +2211,15 @@
 
   $("#roleForm").addEventListener("submit", function (e) {
     e.preventDefault();
-    var name = $("#rName").value.trim();
-    if (db.roles.some(function (r) { return r.name.toLowerCase() === name.toLowerCase(); })) {
-      toast("A role with that name already exists.", "err"); return;
-    }
-    db.roles.push({
-      id: db.seqRole++, name: name,
-      createdAt: new Date().toISOString(),
-      createdBy: me ? me.name : "System",
+    POST("roles", {
+      name:  $("#rName").value.trim(),
       perms: readPermGrid($("#roleFormPerms"))
-    });
-    save(); closeModal($("#roleModal"));
-    renderRoles(); fillRoleSelect();
-    toast("Role created.", "ok");
+    }).then(function (d) {
+      db.roles.push(d.role);
+      closeModal($("#roleModal"));
+      renderRoles(); fillRoleSelect();
+      toast("Role created.", "ok");
+    }).catch(fail);
   });
 
   /* ── view / edit a role's access ─────────────────────── */
@@ -1534,7 +2230,7 @@
     accessRoleId = id;
     $("#accessTitle").textContent = "Role Access · " + r.name;
     $("#accessPerms").innerHTML = permGrid(r.perms || {});
-    $("#accessHint").textContent = (me && roleOf(me) && roleOf(me).id === id)
+    $("#accessHint").textContent = (me && me.roleId === id)
       ? "This is your own role — keep User Access and Role Access switched on."
       : "Turn a module on to let this role open it.";
     openModal("#accessModal");
@@ -1548,17 +2244,29 @@
   $("#accessSave").addEventListener("click", function () {
     var r = db.roles.find(function (x) { return x.id === accessRoleId; });
     if (!r) return;
+
     var perms = readPermGrid($("#accessPerms"));
     /* Removing your own way back into this screen would strand the install. */
-    if (me && roleOf(me) && roleOf(me).id === r.id && !(perms.userAccess && perms.roleAccess)) {
+    if (me && me.roleId === r.id && !(perms.userAccess && perms.roleAccess)) {
       toast("Keep User Access and Role Access on for your own role.", "err");
       return;
     }
-    r.perms = perms;
-    save(); closeModal($("#accessModal"));
-    renderRoles(); applyPermsToNav();
-    if (!can(savedPage())) { var p = firstAllowed(); applyPage(p); refreshPage(p); }
-    toast("Access updated for " + r.name + ".", "ok");
+
+    PUT("roles/" + r.id, { perms: perms }).then(function (d) {
+      var i = db.roles.findIndex(function (x) { return x.id === r.id; });
+      if (i > -1) db.roles[i] = d.role;
+
+      /* Editing your own role changes what you may see right now. */
+      if (me && me.roleId === r.id) me.perms = d.role.perms;
+
+      closeModal($("#accessModal"));
+      renderRoles(); applyPermsToNav();
+      /* Check the screen actually open, not savedPage() — that already falls
+         back to an allowed page, so the test could never fail and someone who
+         revoked their own access stayed sitting on the forbidden screen. */
+      if (current && !can(current)) goPage(firstAllowed());
+      toast("Access updated for " + r.name + ".", "ok");
+    }).catch(fail);
   });
 
   /* ── boot ────────────────────────────────────────────── */
@@ -1573,23 +2281,29 @@
   $("#bdFrom").value = isoDate(new Date(today.getFullYear(), today.getMonth(), 1));
 
   initCombos();
-  fillArticleSelects(); fillCustomerSelect(); fillRoleSelect();
-  renderVars(); renderRecent(); renderCust(); renderCart(); renderSales();
-  renderRetCart(); renderReturns(); renderSheet();
-  renderStockSummary(); renderByDate();
-  renderUsers(); renderRoles();
-  updateChip();
+  initArticleThumb();
 
-  /* An open session picks up where it left off; otherwise the login screen
-     stays up and nothing behind it is reachable. */
-  me = readSession();
-  if (me) {
-    $("#loginScreen").classList.remove("show");
-    document.body.classList.remove("locked");
-    applyPermsToNav();
-    var startPage = savedPage();
-    applyPage(startPage); refreshPage(startPage);
-  } else {
-    showLogin("");
-  }
+  /* Paint the screen the browser was last on before anything slow happens.
+     The markup ships with Product Variable marked active, and the real switch
+     only lands in enterApp() — two round trips later — so without this the
+     user watches the wrong page for as long as the server takes to answer.
+     Permissions are not known yet; enterApp() re-checks and moves them if the
+     role cannot open it. */
+  var boot = rememberedPage();
+  if (boot) applyPage(boot);
+
+  renderAll();
+
+  /* Whether a session is open is the server's answer, not something the page
+     can decide for itself — ask, then either restore the app or lock it. */
+  GET("me")
+    .then(function (d) {
+      if (!d.user) { showLogin(""); return; }
+      return loadAll().then(function () { enterApp(false); });
+    })
+    .catch(function (err) {
+      showLogin(err && err.status
+        ? (err.message || "")
+        : "Cannot reach the server. Check that it is running.");
+    });
 })();
