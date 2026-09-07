@@ -48,17 +48,14 @@ class ArticleController extends LookupController
      *
      * A barcode records the article as text, so a rename has to sweep the
      * products too — otherwise the list says one thing and the stock behind
-     * it says another. That rewrites what already-printed labels claim, which
-     * is why this is Super Admin only, checked here as well as in the UI.
+     * it says another. It rewrites what already-printed labels claim, so the
+     * response reports how many pairs moved.
+     *
+     * Open to any role that can reach the screens this is offered on; the
+     * route's module gate is the access control.
      */
     public function update(Request $request, int $id)
     {
-        if (! $request->user()->isSuperAdmin()) {
-            return response()->json([
-                'message' => 'Only a Super Admin can edit an article.',
-            ], 403);
-        }
-
         $data = $request->validate([
             'label'        => ['required', 'string', 'max:120'],
             'image'        => self::IMAGE_RULES,

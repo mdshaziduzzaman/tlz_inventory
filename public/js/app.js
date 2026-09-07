@@ -240,8 +240,9 @@
     /* The Add Product shortcuts open the Product Variable modals, so they
        follow that module's access, not this page's — and Edit carries the
        extra Super Admin rule that renaming an article has everywhere. */
-    $("#productListShortcuts").style.display = can("variable") ? "" : "none";
-    $("#editArticleBtn").style.display = isSuperAdmin() ? "" : "none";
+    /* Edit Article and Add Color are open to every role: they are part of
+       filling in this form, not administration. The routes behind them accept
+       either the variable or the product module. */
 
     /* Browsing the whole stock list from the till is a Super Admin thing;
        everyone else works from the barcode in front of them. */
@@ -1568,12 +1569,28 @@
     var disc = Math.min(sub, parseFloat($("#sDiscount").value) || 0);
     var cust = db.customers.find(function (c) { return c.id === +$("#sCustomer").value; });
 
+    /* Nothing goes out at zero. The box starts at 0.00, so an unpriced row is
+       the easy mistake to make — block it here and say which pair it is,
+       rather than letting the server bounce the whole invoice. */
+    var unpriced = cart.filter(function (code) { return !(priceOf(code) > 0); });
+
     $("#cartCount").textContent = cart.length + " pairs";
     $("#sumCust").textContent  = cust ? cust.name : "—";
     $("#sumItems").textContent = cart.length;
     $("#sumSub").textContent   = money(sub);
     $("#sumTotal").textContent = money(sub - disc);
-    $("#checkoutBtn").disabled = !(cart.length && cust);
+    $("#checkoutBtn").disabled = !(cart.length && cust) || unpriced.length > 0;
+
+    $("#cartWarn").textContent = unpriced.length
+      ? (unpriced.length === 1
+          ? "Set a price for " + unpriced[0] + " before confirming."
+          : "Set a price for " + unpriced.length + " pairs before confirming.")
+      : "";
+
+    /* Mark the rows themselves so the message points somewhere. */
+    $$("#cartBody [data-price]").forEach(function (inp) {
+      inp.classList.toggle("bad", !(priceOf(inp.dataset.price) > 0));
+    });
   }
 
   $("#checkoutBtn").addEventListener("click", function () {
@@ -1888,7 +1905,7 @@
 
   function clearStockSummary() {
     ssApplied = false;
-    $("#ssBody").innerHTML = reportPrompt(9);
+    $("#ssBody").innerHTML = reportPrompt(8);
     $("#ssFoot").innerHTML = "";
     $("#ssRange").textContent = "Not run";
   }
@@ -1900,36 +1917,43 @@
   }
 
   /* ── 6. Stock Summary ────────────────────────────────── */
+  /* One row per article + colour. The per-size detail hangs off each row, so
+     the pop-up never recomputes it and can never disagree with the line that
+     was clicked. Kept between renders for exactly that reason. */
+  var ssRows = {};
+
   function renderStockSummary() {
     /* Nothing to draw until the user asks for it. */
     if (!ssApplied) { clearStockSummary(); return; }
     var from = $("#ssFrom").value, to = $("#ssTo").value, art = $("#ssArticle").value;
-    var rows = {};   // key = article|color|size
+    ssRows = {};
 
-    function bucket(p) {
-      var k = p.article + "|" + p.color + "|" + p.size;
-      if (!rows[k]) rows[k] = {
-        article: p.article, color: p.color, size: p.size,
-        made: 0, sold: 0, dmg: 0, ret: 0
-      };
-      return rows[k];
+    /* Counts land on the article+colour row and its size at the same time. */
+    function tally(p, field) {
+      var k = p.article + "|" + p.color;
+      var row = ssRows[k] || (ssRows[k] = {
+        key: k, article: p.article, color: p.color,
+        made: 0, sold: 0, dmg: 0, ret: 0, sizes: {}
+      });
+      var s = row.sizes[p.size] || (row.sizes[p.size] = { made: 0, sold: 0, dmg: 0, ret: 0 });
+      row[field]++; s[field]++;
     }
     var pass = function (p) { return !art || p.article === art; };
 
     db.products.forEach(function (p) {
-      if (pass(p) && inRange(p.at, from, to)) bucket(p).made++;
+      if (pass(p) && inRange(p.at, from, to)) tally(p, "made");
     });
     movements().forEach(function (m) {
       if (!pass(m.p) || !inRange(m.at, from, to)) return;
-      var b = bucket(m.p);
-      if (m.type === "sold")   b.sold++;
-      if (m.type === "damage") b.dmg++;
-      if (m.type === "return") b.ret++;
+      if (m.type === "sold")   tally(m.p, "sold");
+      if (m.type === "damage") tally(m.p, "dmg");
+      if (m.type === "return") tally(m.p, "ret");
     });
 
-    var list = Object.keys(rows).map(function (k) { return rows[k]; }).sort(function (a, b) {
-      return (a.article + a.color + a.size).localeCompare(b.article + b.color + b.size);
-    });
+    var list = Object.keys(ssRows).map(function (k) { return ssRows[k]; })
+      .sort(function (a, b) {
+        return (a.article + a.color).localeCompare(b.article + b.color);
+      });
     var tot = { made: 0, sold: 0, dmg: 0, ret: 0, fresh: 0, total: 0 };
     var z = function (n) { return n === 0 ? ' class="num z"' : ' class="num"'; };
 
@@ -1941,8 +1965,11 @@
 
       return '<tr>' +
         '<td class="mono grp-strong">' + esc(r.article) + '</td>' +
-        '<td><span class="swatch"><i style="background:' + esc(colorDot(r.color)) + '"></i>' + esc(r.color) + '</span></td>' +
-        '<td><span class="badge">' + esc(r.size) + '</span></td>' +
+        /* The colour opens the size-wise breakdown for this line. */
+        '<td><button type="button" class="ss-color" data-ss-key="' + esc(r.key) +
+          '" title="Size-wise details">' +
+          '<span class="swatch"><i style="background:' + esc(colorDot(r.color)) + '"></i>' +
+          esc(r.color) + '</span></button></td>' +
         '<td' + z(r.made) + '>' + r.made + '</td>' +
         '<td' + z(r.sold) + '>' + r.sold + '</td>' +
         '<td' + z(r.dmg)  + '>' + r.dmg  + '</td>' +
@@ -1950,11 +1977,11 @@
         '<td' + z(fresh)  + ' style="color:var(--ok)">' + fresh + '</td>' +
         '<td' + z(total)  + ' style="color:var(--copper)">' + total + '</td>' +
       '</tr>';
-    }).join("") : '<tr><td colspan="9"><div class="empty">No stock movement in this period.</div></td></tr>';
+    }).join("") : '<tr><td colspan="8"><div class="empty">No stock movement in this period.</div></td></tr>';
 
     $("#ssFoot").innerHTML = list.length ?
       '<tr>' +
-        '<td class="lbl-cell" colspan="3">Sub-Total · ' + list.length + ' variant(s)</td>' +
+        '<td class="lbl-cell" colspan="2">Sub-Total · ' + list.length + ' article / colour</td>' +
         '<td class="num">' + tot.made  + '</td>' +
         '<td class="num">' + tot.sold  + '</td>' +
         '<td class="num">' + tot.dmg   + '</td>' +
@@ -1965,6 +1992,74 @@
 
     $("#ssRange").textContent = rangeLabel(from, to);
   }
+
+  /* Sizes to list for one line: the whole master list, so a size with no
+     movement reads as a real zero instead of just being absent — plus any
+     size that does have movement but has since been taken off that list,
+     otherwise the pop-up would total less than the row it came from. */
+  function ssSizeList(row) {
+    var seen = {}, out = [];
+    db.sizes.forEach(function (s) {
+      if (!seen[s.label]) { seen[s.label] = 1; out.push(s.label); }
+    });
+    Object.keys(row.sizes).forEach(function (s) {
+      if (!seen[s]) { seen[s] = 1; out.push(s); }
+    });
+    return out.sort(function (a, b) {
+      var na = parseFloat(a), nb = parseFloat(b);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return String(a).localeCompare(String(b));
+    });
+  }
+
+  function showSizeBreakdown(key) {
+    var row = ssRows[key];
+    if (!row) return;
+
+    var tot = { made: 0, sold: 0, dmg: 0, ret: 0, fresh: 0, total: 0 };
+    var z = function (n) { return n === 0 ? ' class="num z"' : ' class="num"'; };
+    var blank = { made: 0, sold: 0, dmg: 0, ret: 0 };
+
+    $("#ssSizeTitle").textContent = row.article + " · " + row.color;
+
+    $("#ssSizeBody").innerHTML = ssSizeList(row).map(function (size) {
+      var s = row.sizes[size] || blank;
+      var fresh = s.made - s.sold - s.dmg + s.ret;
+      var total = s.made - s.sold + s.ret;
+      tot.made += s.made; tot.sold += s.sold; tot.dmg += s.dmg;
+      tot.ret += s.ret;   tot.fresh += fresh; tot.total += total;
+
+      /* A size with nothing at all in the period is dimmed, so the sizes that
+         did move are the ones the eye lands on. */
+      return '<tr' + (s === blank ? ' class="row-off"' : '') + '>' +
+        '<td><span class="badge">' + esc(size) + '</span></td>' +
+        '<td' + z(s.made) + '>' + s.made + '</td>' +
+        '<td' + z(s.sold) + '>' + s.sold + '</td>' +
+        '<td' + z(s.dmg)  + '>' + s.dmg  + '</td>' +
+        '<td' + z(s.ret)  + '>' + s.ret  + '</td>' +
+        '<td' + z(fresh)  + ' style="color:var(--ok)">' + fresh + '</td>' +
+        '<td' + z(total)  + ' style="color:var(--copper)">' + total + '</td>' +
+      '</tr>';
+    }).join("");
+
+    $("#ssSizeFoot").innerHTML =
+      '<tr>' +
+        '<td class="lbl-cell">Total</td>' +
+        '<td class="num">' + tot.made + '</td>' +
+        '<td class="num">' + tot.sold + '</td>' +
+        '<td class="num">' + tot.dmg  + '</td>' +
+        '<td class="num">' + tot.ret  + '</td>' +
+        '<td class="num" style="color:var(--ok)">'     + tot.fresh + '</td>' +
+        '<td class="num" style="color:var(--copper)">' + tot.total + '</td>' +
+      '</tr>';
+
+    openModal("#ssSizeModal");
+  }
+
+  $("#ssBody").addEventListener("click", function (e) {
+    var btn = e.target.closest("[data-ss-key]");
+    if (btn) showSizeBreakdown(btn.dataset.ssKey);
+  });
 
   /* ── 7. By Date Stock ────────────────────────────────── */
   var PTYPE = { stockin: "Stock In", sold: "Sold", damage: "Damage", "return": "Return" };

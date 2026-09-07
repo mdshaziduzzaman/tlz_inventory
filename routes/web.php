@@ -34,15 +34,21 @@ Route::prefix('api')->group(function () {
         Route::middleware('module:variable')->group(function () {
             Route::post('articles', [ArticleController::class, 'store']);
             Route::delete('articles/{id}', [ArticleController::class, 'destroy']);
-            /* POST rather than PUT: the browser can only send a file upload
-               as multipart on a POST, and this carries the article photo. */
-            Route::post('articles/{id}', [ArticleController::class, 'update']);
 
-            Route::post('colors', [ColorController::class, 'store']);
             Route::delete('colors/{id}', [ColorController::class, 'destroy']);
 
             Route::post('sizes', [SizeController::class, 'store']);
             Route::delete('sizes/{id}', [SizeController::class, 'destroy']);
+        });
+
+        /* Add Product offers these two as shortcuts, so whoever can create a
+           product can also name a colour or correct an article without being
+           sent to the other screen. Either module opens them. */
+        Route::middleware('module:variable,product')->group(function () {
+            /* POST rather than PUT: the browser can only send a file upload
+               as multipart on a POST, and this carries the article photo. */
+            Route::post('articles/{id}', [ArticleController::class, 'update']);
+            Route::post('colors', [ColorController::class, 'store']);
         });
 
         Route::middleware('module:product')->group(function () {

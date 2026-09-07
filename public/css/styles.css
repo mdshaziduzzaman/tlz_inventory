@@ -281,6 +281,11 @@ tbody tr:last-child td{border-bottom:0}
    about 20px of the box on their own. */
 .price-cell{width:100%;max-width:150px;padding:7px 10px;text-align:right;
   font-family:var(--mono);font-size:13.5px;margin-left:auto;display:block}
+/* A pair still sitting at 0.00 — the one thing stopping the sale. */
+.price-cell.bad{border-color:var(--danger);background:rgba(192,57,43,.05)}
+.price-cell.bad:focus{box-shadow:0 0 0 3px rgba(192,57,43,.14)}
+.cart-warn{margin-top:14px;font-size:12.5px;color:var(--danger);line-height:1.5}
+.cart-warn:empty{display:none}
 tbody tr:hover{background:var(--panel-2)}
 td.mono,.mono{font-family:var(--mono);font-size:12.5px;letter-spacing:.4px}
 td.num{text-align:right;font-family:var(--mono)}
@@ -385,11 +390,34 @@ td.num{text-align:right;font-family:var(--mono)}
 .toast.ok{border-left-color:#2ecc71}
 .toast.err{border-left-color:#ff6b5e}
 
+
+
+/* ── Stock Summary: the size-wise pop-up table ─────────────── */
+/* Everything centred, headers and values alike, so the columns read as one
+   grid. The treatments below are the ones .rep gave it; the right-aligned
+   numbers are the one part deliberately left behind. */
+.ss-size-table th,.ss-size-table td{text-align:center}
+.ss-size-table thead th{vertical-align:bottom;line-height:1.35}
+.ss-size-table tbody td.num{font-weight:600}
+.ss-size-table tbody td.z{color:var(--txt-mute);font-weight:400}
+/* ── Stock Summary: the colour opens a size-wise breakdown ─── */
+/* A plain swatch gives no hint that it does anything, so it gets the
+   underline and the cursor of a link while staying a real button. */
+.ss-color{
+  background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;
+  text-align:left;border-bottom:1px dashed var(--copper);
+}
+.ss-color:hover .swatch{color:var(--copper)}
+.ss-color:focus-visible{outline:2px solid var(--copper);outline-offset:2px}
 /* ── Print ─────────────────────────────────────────────────── */
 @media print{
   body{background:#fff;background-image:none}
   .sidebar,.topbar,.no-print,.toast,.head-actions{display:none!important}
+  /* A modal left open would otherwise land on the paper on top of the report. */
+  .modal-back{display:none!important}
   #page-barcode .page-head,#page-barcode .card-head{display:none!important}
+  /* On paper the colour is just a colour — nothing to click. */
+  .ss-color{border-bottom:0}
   .content{padding:0;margin:0}
   .card{border:0;box-shadow:none;background:#fff;margin:0}
   #page-barcode .card-body{padding:0}

@@ -24,8 +24,16 @@ class SaleController extends Controller
             'customer_id'     => ['required', 'integer', 'exists:customers,id'],
             'items'           => ['required', 'array', 'min:1', 'max:500'],
             'items.*.code'    => ['required', 'string'],
-            'items.*.price'   => ['required', 'numeric', 'min:0', 'max:99999999'],
+            /* A pair cannot go out at nothing. Zero is what the box shows
+               before a price has been typed, so letting it through records a
+               sale that earns nothing and quietly understates the takings. */
+            'items.*.price'   => ['required', 'numeric', 'gt:0', 'max:99999999'],
             'discount'        => ['nullable', 'numeric', 'min:0'],
+        ], [
+            /* The default names the field by its array path — "items.0.price"
+               means nothing at a till counter. */
+            'items.*.price.gt'       => 'Every pair needs a price above zero.',
+            'items.*.price.required' => 'Every pair needs a price above zero.',
         ]);
 
         $codes = array_column($data['items'], 'code');

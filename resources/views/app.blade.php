@@ -386,6 +386,8 @@
                 <span style="color:var(--txt)">Grand Total</span>
                 <b style="color:var(--accent)" id="sumTotal">BDT 0.00</b>
               </div>
+              {{-- Says why Confirm is greyed out; empty when it is not. --}}
+              <div class="cart-warn" id="cartWarn"></div>
               <button class="btn btn-primary btn-block" id="checkoutBtn" style="margin-top:18px" disabled>
                 Confirm Stock Out
               </button>
@@ -530,8 +532,8 @@
             <table class="rep">
               <thead><tr>
                 <th style="width:130px">Article Number</th>
-                <th style="width:120px">Color</th>
-                <th style="width:80px">Size</th>
+                {{-- Click the colour for the size-wise breakdown of that line. --}}
+                <th style="width:140px">Color</th>
                 <th class="num">Manufactured<br>Stock</th>
                 <th class="num">Sold<br>Qty</th>
                 <th class="num">Damage<br>Qty</th>
@@ -1077,6 +1079,44 @@
     </div>
     <div class="modal-foot">
       <button type="button" class="btn btn-primary" data-close>Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Modal: size-wise breakdown of one Stock Summary line ══ -->
+<div class="modal-back" id="ssSizeModal">
+  <div class="modal modal-wide">
+    <div class="modal-head">
+      <h3 id="ssSizeTitle">Size-wise Stock</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-body">
+      {{-- Filled by showSizeBreakdown(). Every size on the master list shows,
+           zero or not, so a gap in the range is visible rather than missing. --}}
+      <div class="table-wrap">
+        {{-- Not a .rep table: that class right-aligns numbers, which is the
+             opposite of what this grid wants. --}}
+        <table class="hist-table ss-size-table">
+          <thead><tr>
+            <th style="width:90px">Size</th>
+            <th class="num">Manufactured<br>Stock</th>
+            <th class="num">Sold<br>Qty</th>
+            <th class="num">Damage<br>Qty</th>
+            <th class="num">Return<br>Stock</th>
+            <th class="num">Fresh<br>Qty</th>
+            <th class="num">Total<br>Stock</th>
+          </tr></thead>
+          <tbody id="ssSizeBody"></tbody>
+          <tfoot id="ssSizeFoot"></tfoot>
+        </table>
+      </div>
+      <div class="hint" style="margin-top:12px">
+        <b>Fresh Qty</b> = Manufactured &minus; Sold &minus; Damage + Return &nbsp;·&nbsp;
+        <b>Total Stock</b> = Manufactured &minus; Sold + Return
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn btn-primary" data-close>Close</button>
     </div>
   </div>
 </div>
