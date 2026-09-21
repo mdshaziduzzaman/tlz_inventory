@@ -20,7 +20,7 @@ class CustomerController extends Controller
         ]);
 
         $c = DB::transaction(function () use ($data) {
-            $n = Codes::bump('customer');
+            $n = Codes::bump('customer', 1, Codes::highest('customers', 'code', 'CUS-'));
 
             return Customer::create($data + ['code' => 'CUS-' . Codes::pad($n, 4)]);
         });

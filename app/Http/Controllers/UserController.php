@@ -25,7 +25,7 @@ class UserController extends Controller
         }
 
         $u = DB::transaction(function () use ($data) {
-            $n = Codes::bump('user');
+            $n = Codes::bump('user', 1, Codes::highest('users', 'code', 'USR-'));
 
             return User::create([
                 'code'     => 'USR-' . Codes::pad($n, 4),

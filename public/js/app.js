@@ -11,11 +11,15 @@
     { key: "barcode",    label: "Barcode Manage" },
     { key: "customer",   label: "Customer Details" },
     { key: "sales",      label: "Sales / Stock Out" },
+    /* Not a page — one button on the Sales screen. `under` both nests it in
+       the permission list and tells the page-walking code to skip it. */
+    { key: "salesShowBarcode", label: "Show Barcode", under: "sales" },
     { key: "return",     label: "Return / Damage" },
     { key: "repSummary", label: "Stock Summary",  group: "Report" },
     { key: "repDate",    label: "By Date Stock",  group: "Report" },
     { key: "userAccess", label: "User Access",    group: "User Permission" },
-    { key: "roleAccess", label: "Role Access",    group: "User Permission" }
+    { key: "roleAccess", label: "Role Access",    group: "User Permission" },
+    { key: "settings",   label: "Information Change" }
   ];
 
   /* The in-memory mirror of what the server holds. Every render function
@@ -24,7 +28,7 @@
   var db = {
     articles: [], colors: [], sizes: [],
     customers: [], products: [], sales: [], returns: [],
-    roles: [], users: [], nextCode: "—"
+    roles: [], users: [], nextCode: "—", settings: {}
   };
 
   /* ── API client ──────────────────────────────────────── */
@@ -124,6 +128,7 @@
       db.roles     = d.roles;
       db.users     = d.users;
       db.nextCode  = d.nextCode;
+      db.settings  = d.settings || {};
       me = d.me;
       return d;
     });
@@ -213,15 +218,21 @@
      it only decides what to draw. Every route is checked again server-side. */
   var me = null;
 
+  /* An action key also needs the page it lives on — a tick left behind on the
+     child must not survive the parent being switched off. Mirrors
+     Role::allows() on the server, which is the one that actually decides. */
   function can(key) {
-    return !!(me && me.perms && me.perms[key]);
+    if (!(me && me.perms && me.perms[key])) return false;
+    var m = MODULES.find(function (x) { return x.key === key; });
+    return !(m && m.under) || !!me.perms[m.under];
   }
   /* Wiping the whole database is a Super Admin-only lever. */
   function isSuperAdmin() {
     return !!(me && me.roleName === "Super Admin");
   }
   function firstAllowed() {
-    var m = MODULES.find(function (x) { return can(x.key); });
+    /* Only pages can be landed on; an action key has no screen of its own. */
+    var m = MODULES.find(function (x) { return !x.under && can(x.key); });
     return m ? m.key : "variable";
   }
 
@@ -244,9 +255,8 @@
        filling in this form, not administration. The routes behind them accept
        either the variable or the product module. */
 
-    /* Browsing the whole stock list from the till is a Super Admin thing;
-       everyone else works from the barcode in front of them. */
-    $("#openStockModal").style.display = isSuperAdmin() ? "" : "none";
+    /* Granted per role from Role Access, not fixed to Super Admin. */
+    $("#openStockModal").style.display = can("salesShowBarcode") ? "" : "none";
 
     var who = me ? me.name + " · " + (me.roleName || "No role") : "";
     $("#whoAmI").textContent = who;
@@ -284,6 +294,9 @@
     $("#loginScreen").classList.remove("show");
     document.body.classList.remove("locked");
     applyPermsToNav();
+    /* The page was rendered with whatever branding the server knew at load;
+       another terminal may have changed it since, so take the fresh copy. */
+    applyBranding();
     renderAll();
 
     /* A page the role can no longer open must not be restored into. */
@@ -295,6 +308,39 @@
     if (greet) toast("Welcome back, " + me.name + ".", "ok");
   }
 
+
+  /* ── show/hide the password ──────────────────────────── */
+  /* Only the sign-in field is masked: the two admin ones are plain text on
+     purpose, because whoever sets a password has to read it back. */
+  var EYE_SVG =
+    '<svg viewBox="0 0 24 24"><path d="M1.5 12S5 5.5 12 5.5 22.5 12 22.5 12 19 18.5 12 18.5 1.5 12 1.5 12z"/>' +
+    '<circle cx="12" cy="12" r="3.2"/></svg>';
+  var EYE_OFF_SVG =
+    '<svg viewBox="0 0 24 24"><path d="M9.9 5.7A9.6 9.6 0 0 1 12 5.5c7 0 10.5 6.5 10.5 6.5a17 17 0 0 1-3.3 4.1"/>' +
+    '<path d="M6.3 7.8A16.7 16.7 0 0 0 1.5 12S5 18.5 12 18.5c1.8 0 3.3-.4 4.6-1"/>' +
+    '<path d="M9.8 9.9a3.2 3.2 0 0 0 4.4 4.4"/><path d="M3 3l18 18"/></svg>';
+
+  (function () {
+    var input = $("#loginPass"), eye = $("#loginPassEye");
+
+    function paint() {
+      var shown = input.type === "text";
+      eye.innerHTML = shown ? EYE_OFF_SVG : EYE_SVG;
+      eye.setAttribute("aria-label", shown ? "Hide password" : "Show password");
+      eye.setAttribute("aria-pressed", shown ? "true" : "false");
+    }
+
+    eye.addEventListener("click", function () {
+      input.type = input.type === "password" ? "text" : "password";
+      paint();
+      /* Put the caret back where it was, at the end of what is typed. */
+      input.focus();
+      var n = input.value.length;
+      try { input.setSelectionRange(n, n); } catch (e) {}
+    });
+
+    paint();
+  })();
   $("#loginForm").addEventListener("submit", function (e) {
     e.preventDefault();
     var btn = $("#loginForm button[type=submit]");
@@ -314,8 +360,11 @@
   });
 
   $("#logoutBtn").addEventListener("click", function () {
-    if (!confirm("Sign out of StockFlow?")) return;
-    doLogout();
+    askConfirm({
+      title: "Do you want to logout?",
+      text: "You will be signed out and taken back to the sign-in screen.",
+      okText: "Logout"
+    }).then(function (yes) { if (yes) doLogout(); });
   });
 
   /* ── navigation ──────────────────────────────────────── */
@@ -323,7 +372,8 @@
     variable: "Product Variable", product: "Add Product", customer: "Customer Details",
     sales: "Sales / Stock Out", "return": "Return / Damage", barcode: "Barcode Manage",
     repSummary: "Report / Stock Summary", repDate: "Report / By Date Stock",
-    userAccess: "User Permission / User Access", roleAccess: "User Permission / Role Access"
+    userAccess: "User Permission / User Access", roleAccess: "User Permission / Role Access",
+    settings: "Information Change"
   };
   /* which collapsible group a sub-page lives under */
   var GROUP_OF = { repSummary: "#reportGroup", repDate: "#reportGroup",
@@ -418,6 +468,7 @@
     if (p === "repDate")    clearByDate();
     if (p === "userAccess") renderUsers();
     if (p === "roleAccess") renderRoles();
+    if (p === "settings")   settingsForm();
   }
 
   function goPage(p) {
@@ -481,12 +532,15 @@
        makes an entry with no state at all, and reading that as the end of the
        trail put a sign-out prompt in front of anyone who touched the URL. */
     if (st && st.sfGuard) {
-      if (confirm("No earlier page — do you want to sign out of StockFlow?")) {
-        doLogout();
-      } else if (current) {
+      askConfirm({
+        title: "Do you want to logout?",
+        text: "There is no earlier page to go back to.",
+        okText: "Logout"
+      }).then(function (yes) {
+        if (yes) { doLogout(); }
         /* Step back onto the page they were on, so Back is a no-op. */
-        pushPage(current);
-      }
+        else if (current) { pushPage(current); }
+      });
       return;
     }
 
@@ -510,6 +564,73 @@
   /* ── modals ──────────────────────────────────────────── */
   function openModal(id) { $(id).classList.add("open"); }
   function closeModal(el) { el.classList.remove("open"); }
+
+  /* ── confirm dialog ──────────────────────────────────── */
+  /* A styled stand-in for window.confirm(). Returns a promise, so callers
+     read as `askConfirm(...).then(function (yes) { ... })` instead of
+     branching on a blocking return value.
+     Resolves false however it is dismissed — Cancel, Escape, or a click on
+     the backdrop — so no path leaves the caller waiting. */
+  var WARN_SVG =
+    '<svg viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>' +
+    '<path d="M12 9v4"/><path d="M12 17h.01"/></svg>';
+  var ASK_SVG =
+    '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/>' +
+    '<path d="M12 17h.01"/></svg>';
+
+  var askDone = null;   // resolver for the dialog currently open
+
+  function settleConfirm(answer) {
+    if (!askDone) return;
+    var done = askDone;
+    askDone = null;
+    closeModal($("#confirmModal"));
+    done(answer);
+  }
+
+  function askConfirm(opts) {
+    opts = typeof opts === "string" ? { text: opts } : (opts || {});
+
+    /* A second ask while one is up would strand the first caller. */
+    settleConfirm(false);
+
+    $("#confirmTitle").textContent = opts.title || "Are you sure?";
+    $("#confirmText").textContent  = opts.text || "";
+    $("#confirmText").hidden       = !opts.text;
+    $("#confirmNo").textContent    = opts.cancelText || "Cancel";
+    $("#confirmYes").textContent   = opts.okText || "OK";
+
+    var danger = !!opts.danger;
+    $("#confirmYes").className = "btn " + (danger ? "btn-danger-solid" : "btn-primary");
+    $("#confirmIcon").className = "ask-icon" + (danger ? " danger" : "");
+    $("#confirmIcon").innerHTML = danger ? WARN_SVG : ASK_SVG;
+
+    openModal("#confirmModal");
+    setTimeout(function () { $("#confirmYes").focus(); }, 40);
+
+    return new Promise(function (resolve) { askDone = resolve; });
+  }
+
+  $("#confirmYes").addEventListener("click", function () { settleConfirm(true); });
+  $("#confirmNo").addEventListener("click", function () { settleConfirm(false); });
+  $("#confirmModal").addEventListener("click", function (e) {
+    if (e.target === this) settleConfirm(false);          // clicked the backdrop
+  });
+  /* The shared Escape handler only removes the class; the promise still has
+     to be answered, so it is caught here too. */
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && askDone) settleConfirm(false);
+  });
+  /* A date field opens its picker wherever you click it. The browser only
+     does that from its own little icon, which the CSS hides — so this is the
+     only thing opening it, and there is nothing to fire twice. */
+  document.addEventListener("click", function (e) {
+    var el = e.target.closest && e.target.closest('input[type="date"]');
+    if (!el || el.disabled || el.readOnly) return;
+    /* Not in every browser, and it throws if the picker is already up. */
+    try { el.showPicker(); } catch (err) { /* leave the native behaviour */ }
+  });
+
   $$(".modal-back").forEach(function (m) {
     m.addEventListener("click", function (e) {
       if (e.target === m || e.target.hasAttribute("data-close")) closeModal(m);
@@ -682,10 +803,15 @@
      modal and the edit modal — so it is built once per prefix. */
   var MAX_IMAGE = 4 * 1024 * 1024;
 
-  function badImage(file) {
+  /* `rules` matches what the matching endpoint accepts. Letting the browser
+     through on something the server will reject only wastes the upload. */
+  function badImage(file, rules) {
+    rules = rules || { types: /^image\/(jpeg|png|webp)$/, max: MAX_IMAGE, say: "JPG, PNG or WebP" };
     if (!file) return "No file chosen.";
-    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) return "Choose a JPG, PNG or WebP image.";
-    if (file.size > MAX_IMAGE) return "That image is over 4 MB. Choose a smaller one.";
+    if (!rules.types.test(file.type)) return "Choose a " + rules.say + " image.";
+    if (file.size > rules.max) {
+      return "That image is over " + Math.round(rules.max / 1048576) + " MB. Choose a smaller one.";
+    }
     return null;
   }
 
@@ -697,7 +823,7 @@
    * "left the existing photo alone" from "asked for it to be removed", which
    * the edit form has to tell the server apart.
    */
-  function imagePicker(p) {
+  function imagePicker(p, rules) {
     var input = $("#" + p + "Image"),
         box   = $("#" + p + "ImageDrop"),
         img   = $("#" + p + "ImagePreview"),
@@ -719,7 +845,7 @@
 
     function choose(f) {
       if (!f) return;
-      var err = badImage(f);
+      var err = badImage(f, rules);
       if (err) { toast(err, "err"); return; }
       file = f; cleared = false;
       paint(URL.createObjectURL(f));
@@ -1801,6 +1927,21 @@
   }
 
   /* ══ 6. BARCODE MANAGE ═════════════════════════════════ */
+  /* Like the two reports: nothing is drawn until the filter is run. Pulling
+     every barcode ever made the moment the page opens is a lot of SVG for a
+     sheet nobody asked for yet. */
+  var bApplied = false;
+
+  function clearSheet() {
+    bApplied = false;
+    $("#labelSheet").innerHTML =
+      '<div class="empty" style="grid-column:1/-1">' +
+      '<svg viewBox="0 0 24 24"><path d="M3 4h18l-7 8v6l-4 2v-8z"/></svg>' +
+      'Choose a date range, then press <b>Apply Filter</b>.' +
+      '</div>';
+    $("#bCount").textContent = "Not run";
+  }
+
   function filtered() {
     var from = $("#bFrom").value, to = $("#bTo").value;
     var st = $("#bStatus").value, art = $("#bArticle").value;
@@ -1814,7 +1955,10 @@
     });
   }
 
+  /* Safe to call from anywhere that changes stock: it repaints the sheet only
+     if one has actually been asked for, and otherwise leaves the prompt. */
   function renderSheet() {
+    if (!bApplied) { clearSheet(); return; }
     var rows = filtered();
     $("#labelSheet").innerHTML = rows.length
       ? rows.map(labelCard).join("")
@@ -1822,18 +1966,19 @@
     $("#bCount").textContent = rows.length + " labels";
   }
 
-  $("#bApply").addEventListener("click", renderSheet);
+  $("#bApply").addEventListener("click", function () { bApplied = true; renderSheet(); });
+  /* Reset clears the filters and the sheet — it does not silently re-run. */
   $("#bReset").addEventListener("click", function () {
     $("#bFrom").value = ""; $("#bTo").value = "";
     $("#bStatus").value = ""; $("#bArticle").value = "";
-    resync(); renderSheet();
+    resync(); clearSheet();
   });
   $("#printBtn").addEventListener("click", function () {
-    if (!filtered().length) { toast("Nothing to print.", "err"); return; }
+    if (!bApplied || !filtered().length) { toast("Nothing to print — run the filter first.", "err"); return; }
     window.print();
   });
   $("#pdfBtn").addEventListener("click", function () {
-    if (!filtered().length) { toast("Nothing to export.", "err"); return; }
+    if (!bApplied || !filtered().length) { toast("Nothing to export — run the filter first.", "err"); return; }
     toast("Choose “Save as PDF” in the print dialog.");
     setTimeout(function () { window.print(); }, 500);
   });
@@ -2262,12 +2407,26 @@
         if (g) out += '<div class="perm-group">' + esc(g) + '</div>';
         lastGroup = g;
       }
-      out += '<label class="perm-row' + (m.group ? " sub" : "") + '">' +
-        '<input type="checkbox" data-perm="' + m.key + '"' + (perms[m.key] ? " checked" : "") + '>' +
+      var off = m.under && !perms[m.under];
+      out += '<label class="perm-row' + (m.group || m.under ? " sub" : "") + '">' +
+        '<input type="checkbox" data-perm="' + m.key + '"' +
+          (m.under ? ' data-under="' + m.under + '"' : "") +
+          (perms[m.key] ? " checked" : "") + (off ? " disabled" : "") + '>' +
         '<span>' + esc(m.label) + '</span>' +
       '</label>';
     });
     return out;
+  }
+
+  /* Turning a page off takes its buttons with it — leaving a live tick on a
+     child of an unreachable page would promise access that can() refuses. */
+  function syncPermChildren(host) {
+    $$("input[data-under]", host).forEach(function (cb) {
+      var parent = $('input[data-perm="' + cb.dataset.under + '"]', host);
+      var on = parent && parent.checked;
+      cb.disabled = !on;
+      if (!on) cb.checked = false;
+    });
   }
   function readPermGrid(host) {
     var perms = {};
@@ -2278,10 +2437,13 @@
   function renderRoles() {
     $("#roleBody").innerHTML = db.roles.length ? db.roles.map(function (r) {
       var used = db.users.filter(function (u) { return u.roleId === r.id; }).length;
-      var on = MODULES.filter(function (m) { return r.perms && r.perms[m.key]; }).length;
+      /* Counts pages only — the line says "modules", and an in-page action is
+         not one of them. */
+      var pages = MODULES.filter(function (m) { return !m.under; });
+      var on = pages.filter(function (m) { return r.perms && r.perms[m.key]; }).length;
       return '<tr>' +
         '<td><b>' + esc(r.name) + '</b>' +
-          '<div class="hint">' + on + ' of ' + MODULES.length + ' modules · ' +
+          '<div class="hint">' + on + ' of ' + pages.length + ' modules · ' +
             used + ' user(s)</div></td>' +
         '<td style="color:var(--txt-dim)">' + fmtDT(r.createdAt) + '</td>' +
         '<td>' + esc(r.createdBy || "—") + '</td>' +
@@ -2352,9 +2514,16 @@
   }
   $("#accessAll").addEventListener("click", function () {
     $$("input[data-perm]", $("#accessPerms")).forEach(function (cb) { cb.checked = true; });
+    syncPermChildren($("#accessPerms"));
   });
   $("#accessNone").addEventListener("click", function () {
     $$("input[data-perm]", $("#accessPerms")).forEach(function (cb) { cb.checked = false; });
+    syncPermChildren($("#accessPerms"));
+  });
+
+  /* Both grids follow their parents as they are ticked. */
+  ["#accessPerms", "#roleFormPerms"].forEach(function (sel) {
+    $(sel).addEventListener("change", function () { syncPermChildren($(sel)); });
   });
   $("#accessSave").addEventListener("click", function () {
     var r = db.roles.find(function (x) { return x.id === accessRoleId; });
@@ -2384,6 +2553,91 @@
     }).catch(fail);
   });
 
+
+  /* ══ 11. INFORMATION CHANGE ════════════════════════════ */
+  /* The name and icon the whole install wears. Saved server-side, so it is
+     the same for everyone rather than a per-browser preference. */
+  /* The icon endpoint also takes .ico, and caps at 2 MB rather than 4. */
+  var favImage = imagePicker("fav", {
+    types: /^image\/(jpeg|png|webp|x-icon|vnd\.microsoft\.icon)$/,
+    max: 2 * 1024 * 1024,
+    say: "PNG, JPG, WebP or ICO"
+  });
+
+  function settingsForm() {
+    var s = db.settings || {};
+    $("#setName").value    = s.app_name || "";
+    $("#setTagline").value = s.tagline || "";
+    $("#setMark").value    = s.mark || "";
+    favImage.reset(s.icon);
+    settingsPreview();
+  }
+
+  /* Follows the fields as they are typed — nothing has to be saved to see it. */
+  function settingsPreview() {
+    var name = $("#setName").value.trim() || "—";
+    var tag  = $("#setTagline").value.trim();
+    var mark = $("#setMark").value.trim() || "—";
+
+    $("#prevTitle").textContent = name + (tag ? " · " + tag : "");
+    $("#prevName").textContent  = name;
+    $("#prevTag").textContent   = tag;
+    $("#prevMark").textContent  = mark;
+
+    var img = $("#favImagePreview");
+    var src = img.hidden ? "" : img.getAttribute("src");
+    $("#prevIcon").innerHTML = src
+      ? '<img src="' + esc(src) + '" alt="">'
+      : '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/></svg>';
+  }
+
+  ["#setName", "#setTagline", "#setMark"].forEach(function (sel) {
+    $(sel).addEventListener("input", settingsPreview);
+  });
+  /* The drop zone has no event of its own, so watch the element it paints. */
+  new MutationObserver(settingsPreview).observe($("#favImagePreview"),
+    { attributes: true, attributeFilter: ["src", "hidden"] });
+
+  $("#setRevert").addEventListener("click", settingsForm);
+
+  /* Push what was saved into the live page, so the tab, the sidebar and the
+     sign-in card change without a reload. */
+  function applyBranding() {
+    var s = db.settings || {};
+    document.title = s.app_name + (s.tagline ? " · " + s.tagline : "");
+    $("#crumbBrand").textContent = s.app_name;
+    $$(".brand h1, .login-brand h1").forEach(function (el) { el.textContent = s.app_name; });
+    $$(".brand small, .login-brand small").forEach(function (el) { el.textContent = s.tagline; });
+    $$(".brand .mark, .login-brand .mark").forEach(function (el) { el.textContent = s.mark; });
+
+    /* Swapping the href alone is not enough — browsers hold the old icon, so
+       the link element is replaced and the version string forces a refetch. */
+    $$('link[rel="icon"]').forEach(function (el) { el.remove(); });
+    if (s.icon) {
+      var link = document.createElement("link");
+      link.rel = "icon";
+      link.href = s.icon + "?v=" + (s.iconVer || Date.now());
+      document.head.appendChild(link);
+    }
+  }
+
+  $("#settingsForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+
+    var fd = new FormData();
+    fd.append("app_name", $("#setName").value.trim());
+    fd.append("tagline", $("#setTagline").value.trim());
+    fd.append("mark", $("#setMark").value.trim());
+    if (favImage.file())    fd.append("icon", favImage.file());
+    if (favImage.cleared()) fd.append("remove_icon", "1");
+
+    POST("settings", fd).then(function (d) {
+      db.settings = d.settings;
+      applyBranding();
+      settingsForm();
+      toast("Information updated.", "ok");
+    }).catch(fail);
+  });
   /* ── boot ────────────────────────────────────────────── */
   var today = new Date();
   $("#todayLbl").textContent = today.toLocaleDateString("en-GB",

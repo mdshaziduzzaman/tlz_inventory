@@ -3,7 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>StockFlow · Inventory & Barcode Manager</title>
+{{--
+  Branding is rendered server-side so the tab is right on the very first
+  paint. Leaving it to JS meant the old name and icon flashed on every load.
+--}}
+@php($brand = \App\Models\Setting::map())
+<title>{{ $brand['app_name'] }}{{ $brand['tagline'] ? ' · ' . $brand['tagline'] : '' }}</title>
+@if ($brand['icon'])
+  <link rel="icon" href="{{ $brand['icon'] }}?v={{ $brand['iconVer'] }}">
+@endif
 <meta name="csrf-token" content="{{ csrf_token() }}">
 <link rel="stylesheet" href="{{ asset("css/styles.css") }}?v={{ filemtime(public_path("css/styles.css")) }}">
 {{--
@@ -40,10 +48,10 @@
 <div @class(['login-screen', 'show' => ! $signedIn]) id="loginScreen">
   <form class="login-card" id="loginForm">
     <div class="login-brand">
-      <div class="mark">SF</div>
+      <div class="mark">{{ $brand['mark'] }}</div>
       <div>
-        <h1>StockFlow</h1>
-        <small>Inventory Suite</small>
+        <h1>{{ $brand['app_name'] }}</h1>
+        <small>{{ $brand['tagline'] }}</small>
       </div>
     </div>
     <h2>Sign in</h2>
@@ -51,11 +59,16 @@
 
     <div class="field">
       <label for="loginUser">User ID</label>
-      <input class="input" id="loginUser" placeholder="e.g. mdshazid" autocomplete="username" required>
+      <input class="input" id="loginUser" autocomplete="username" required>
     </div>
     <div class="field">
       <label for="loginPass">Password</label>
-      <input class="input" id="loginPass" type="password" placeholder="••••••" autocomplete="current-password" required>
+      {{-- The eye sits inside the box, so the field keeps its own outline. --}}
+      <div class="pw-field">
+        <input class="input" id="loginPass" type="password" placeholder="••••••" autocomplete="current-password" required>
+        <button type="button" class="pw-eye" id="loginPassEye"
+                aria-label="Show password" aria-pressed="false"></button>
+      </div>
     </div>
     <div class="login-err" id="loginErr"></div>
     <button class="btn btn-primary btn-block" type="submit" style="margin-top:6px">Sign In</button>
@@ -70,10 +83,10 @@
   <!-- ══ Sidebar ══════════════════════════════════════════ -->
   <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <div class="mark">SF</div>
+      <div class="mark">{{ $brand['mark'] }}</div>
       <div>
-        <h1>StockFlow</h1>
-        <small>Inventory Suite</small>
+        <h1>{{ $brand['app_name'] }}</h1>
+        <small>{{ $brand['tagline'] }}</small>
       </div>
     </div>
 
@@ -126,6 +139,10 @@
           <button class="nav-item nav-child" data-page="roleAccess">Role Access</button>
         </div>
       </div>
+      <button class="nav-item" data-page="settings">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 7 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 14a1.7 1.7 0 0 0-1.6-1H1a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 3 7a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 7 3h.1A1.7 1.7 0 0 0 9 1.4V1a2 2 0 1 1 4 0v.1A1.7 1.7 0 0 0 15 3a1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 7v.1a1.7 1.7 0 0 0 1.6 1.9H23a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+        Information Change
+      </button>
     </nav>
 
     <div class="sidebar-foot">
@@ -142,7 +159,7 @@
       <button class="hamburger" id="navToggle" aria-label="Menu" aria-expanded="false">
         <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
       </button>
-      <div class="crumb">StockFlow &nbsp;/&nbsp; <b id="crumb">Product Variable</b></div>
+      <div class="crumb"><span id="crumbBrand">{{ $brand['app_name'] }}</span> &nbsp;/&nbsp; <b id="crumb">Product Variable</b></div>
       <div class="meta">
         <span id="todayLbl"></span>
         <span class="chip" id="nextCodeChip">—</span>
@@ -735,6 +752,87 @@
         </div>
       </section>
 
+      <!-- ── 11. INFORMATION CHANGE ──────────────────────── -->
+      <section class="page" id="page-settings">
+        <div class="page-head">
+          <div>
+            <h2>Information Change</h2>
+            <p>The name and icon this system shows — on the browser tab, the sign-in card and the sidebar.</p>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h3>Information</h3></div>
+            <form id="settingsForm">
+              <div class="card-body">
+                <div class="field">
+                  <label for="setName">Name *</label>
+                  <input class="input" id="setName" maxlength="60" placeholder="e.g. StockFlow" required>
+                  <div class="hint">Shown on the browser tab, the sidebar and the sign-in card.</div>
+                </div>
+                <div class="field">
+                  <label for="setTagline">Tagline</label>
+                  <input class="input" id="setTagline" maxlength="80" placeholder="e.g. Inventory Suite">
+                  <div class="hint">The small line under the name. Leave it empty to drop it.</div>
+                </div>
+                <div class="field">
+                  <label for="setMark">Short Mark</label>
+                  <input class="input" id="setMark" maxlength="4" placeholder="e.g. SF" style="max-width:120px">
+                  <div class="hint">The letters in the square badge. Up to 4 characters.</div>
+                </div>
+
+                <div class="field">
+                  <label>Icon</label>
+                  {{-- Same drop zone the article photo uses; `fav` is its id prefix. --}}
+                  <input type="file" id="favImage" accept="image/jpeg,image/png,image/webp,image/x-icon,image/vnd.microsoft.icon,.ico" hidden>
+                  <div class="image-drop" id="favImageDrop" tabindex="0" role="button"
+                       aria-label="Choose an icon">
+                    <img id="favImagePreview" alt="" hidden>
+                    <div class="image-drop-empty" id="favImageEmpty">
+                      <svg viewBox="0 0 24 24"><path d="M21 15V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10"/><path d="M3 16l5-5 4 4"/><circle cx="15" cy="8" r="1.4"/><path d="M18 15v6M15 18h6"/></svg>
+                      <span>Click to choose an icon</span>
+                    </div>
+                    <button type="button" class="image-drop-x" id="favImageClear" hidden
+                            aria-label="Remove the icon">&times;</button>
+                  </div>
+                  <div class="hint">
+                    PNG, JPG, WebP or ICO, up to 2&nbsp;MB. A square image around
+                    512&nbsp;&times;&nbsp;512 looks best — browsers scale it down to the tab.
+                  </div>
+                </div>
+              </div>
+              <div class="modal-foot" style="border-radius:0 0 var(--radius) var(--radius)">
+                <button type="button" class="btn btn-ghost" id="setRevert">Undo changes</button>
+                <button type="submit" class="btn btn-primary">Save</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h3>Preview</h3></div>
+            <div class="card-body">
+              {{-- Updates as you type, so nothing has to be saved to be judged. --}}
+              <div class="lbl" style="margin-bottom:8px">Browser tab</div>
+              <div class="tab-preview">
+                <span class="tab-icon" id="prevIcon"></span>
+                <span class="tab-title" id="prevTitle">—</span>
+                <span class="tab-x">&times;</span>
+              </div>
+
+              <div class="lbl" style="margin:20px 0 8px">Sidebar</div>
+              <div class="brand-preview">
+                <div class="mark" id="prevMark">SF</div>
+                <div>
+                  <h1 id="prevName">StockFlow</h1>
+                  <small id="prevTag">Inventory Suite</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </div>
   </main>
 </div>
@@ -1117,6 +1215,24 @@
     </div>
     <div class="modal-foot">
       <button type="button" class="btn btn-primary" data-close>Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Confirm ══════════════════════════════════════════ -->
+{{-- Replaces window.confirm(): centred, styled, and able to say which button
+     is the dangerous one. Driven by askConfirm() in app.js. --}}
+<div class="modal-back modal-centre" id="confirmModal" role="alertdialog"
+     aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="modal modal-ask">
+    <div class="ask-body">
+      <div class="ask-icon" id="confirmIcon"></div>
+      <h3 id="confirmTitle">Are you sure?</h3>
+      <p id="confirmText"></p>
+    </div>
+    <div class="ask-foot">
+      <button type="button" class="btn btn-ghost" id="confirmNo">Cancel</button>
+      <button type="button" class="btn btn-primary" id="confirmYes">OK</button>
     </div>
   </div>
 </div>

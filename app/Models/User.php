@@ -48,7 +48,7 @@ class User extends Authenticatable
             'roleId'   => $this->role_id,
             'roleName' => $this->role?->name,
             'disabled' => $this->disabled,
-            'perms'    => $this->role?->perms ?? [],
+            'perms'    => $this->role?->wirePerms() ?? [],
         ];
     }
 }

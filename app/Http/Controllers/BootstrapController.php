@@ -8,6 +8,7 @@ use App\Models\Customer;
 use App\Models\Product;
 use App\Models\Role;
 use App\Models\Sale;
+use App\Models\Setting;
 use App\Models\Size;
 use App\Models\StockReturn;
 use App\Models\User;
@@ -29,6 +30,7 @@ class BootstrapController extends Controller
             'me'        => $me->toWire(),
             'modules'   => Role::MODULES,
             'nextCode'  => $this->nextBarcode(),
+            'settings'  => Setting::map(),
             'articles'  => Article::ordered()->get()->map->toWire()->all(),
             'colors'    => Color::ordered()->get()->map->toWire()->all(),
             'sizes'     => Size::ordered()->get()->map->toWire()->all(),
@@ -44,7 +46,7 @@ class BootstrapController extends Controller
             ? Role::orderBy('id')->get()->map(fn ($r) => [
                 'id'        => $r->id,
                 'name'      => $r->name,
-                'perms'     => $r->perms,
+                'perms'     => $r->wirePerms(),   /* Super Admin reads as full, never a stale map */
                 'createdAt' => $r->created_at?->toIso8601String(),
                 'createdBy' => $r->created_by,
             ])->all()

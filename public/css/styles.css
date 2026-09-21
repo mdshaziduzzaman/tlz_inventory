@@ -146,6 +146,17 @@ textarea.input{resize:vertical;min-height:92px}
 select.input{appearance:none;cursor:pointer;
   background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237b6b5e' stroke-width='2'><path d='M6 9l6 6 6-6'/></svg>");
   background-repeat:no-repeat;background-position:right 11px center;background-size:16px;padding-right:34px}
+/* Date fields open their picker from anywhere in the box, not just from the
+   little icon. The browser's own indicator is hidden and replaced with a
+   drawn one, so the click handler in app.js is the only thing that opens the
+   picker — nothing left to fire twice. */
+input[type="date"].input{
+  cursor:pointer;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237b6b5e' stroke-width='2'><rect x='3' y='5' width='18' height='16' rx='2'/><path d='M16 3v4M8 3v4M3 11h18'/></svg>");
+  background-repeat:no-repeat;background-position:right 11px center;background-size:16px;
+  padding-right:34px;
+}
+input[type="date"].input::-webkit-calendar-picker-indicator{display:none}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .row-3{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 @media (max-width:640px){.row,.row-3{grid-template-columns:1fr}}
@@ -798,3 +809,89 @@ body.locked .app{display:none}
 @media print{
   .hamburger,.nav-scrim{display:none!important}
 }
+
+/* ── Information Change: the live preview ──────────────────── */
+/* A mock browser tab, so the name and icon can be judged at the size they
+   will actually be seen rather than as form fields. */
+.tab-preview{
+  display:flex;align-items:center;gap:9px;max-width:290px;
+  background:var(--panel-2);border:1px solid var(--line);
+  border-radius:9px 9px 0 0;border-bottom:0;padding:9px 12px;
+  box-shadow:0 -1px 0 var(--line) inset;
+}
+.tab-icon{
+  width:17px;height:17px;flex:0 0 17px;display:grid;place-items:center;
+  color:var(--txt-mute);overflow:hidden;border-radius:3px;
+}
+.tab-icon img{width:100%;height:100%;object-fit:contain;display:block}
+.tab-icon svg{width:14px;height:14px;stroke:currentColor;fill:none;stroke-width:1.7}
+.tab-title{
+  flex:1;min-width:0;font-size:12.5px;color:var(--txt);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+}
+.tab-x{color:var(--txt-mute);font-size:15px;line-height:1}
+
+/* The sidebar's own brand block, on the light panel instead of the dark rail. */
+.brand-preview{
+  display:flex;align-items:center;gap:11px;
+  background:var(--ink);border-radius:10px;padding:14px 16px;
+}
+.brand-preview .mark{
+  width:34px;height:34px;border-radius:7px;background:var(--copper);
+  display:grid;place-items:center;color:#fff;font-weight:800;font-size:14px;
+  letter-spacing:.5px;flex:0 0 34px;
+}
+.brand-preview h1{font-size:15px;font-weight:800;letter-spacing:.4px;color:#fff;text-transform:uppercase}
+.brand-preview small{display:block;color:#8b8177;font-size:10.5px;font-weight:600;letter-spacing:1.1px;text-transform:uppercase}
+.brand-preview small:empty{display:none}
+
+/* An icon is small by nature — the article-sized drop zone dwarfs it, and the
+   preview is capped so a 512px upload does not fill the card. */
+#favImageDrop{min-height:96px}
+#favImagePreview{max-height:72px;width:auto;object-fit:contain}
+
+/* ── Confirm dialog ────────────────────────────────────────── */
+/* The app's other modals sit near the top of the window because they are
+   tall forms. A question is short, so this one is centred — where the eye
+   already is when a native confirm would have appeared. */
+.modal-centre{align-items:center;padding:20px}
+.modal-ask{max-width:420px;text-align:center;animation:ask .16s ease}
+@keyframes ask{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:none}}
+
+.ask-body{padding:30px 28px 22px}
+.ask-icon{
+  width:54px;height:54px;margin:0 auto 16px;border-radius:50%;
+  display:grid;place-items:center;
+  background:var(--accent-soft);color:var(--copper);
+}
+.ask-icon.danger{background:rgba(192,57,43,.1);color:var(--danger)}
+.ask-icon svg{width:26px;height:26px;stroke:currentColor;fill:none;stroke-width:1.9;
+  stroke-linecap:round;stroke-linejoin:round}
+
+.ask-body h3{font-size:17px;font-weight:750;color:var(--ink);line-height:1.35}
+.ask-body p{margin-top:9px;font-size:13.2px;color:var(--txt-dim);line-height:1.55}
+.ask-body p[hidden]{display:none}
+
+.ask-foot{
+  display:flex;gap:10px;padding:0 28px 26px;
+}
+.ask-foot .btn{flex:1;padding:11px 18px}
+
+/* A solid red confirm, for the asks that destroy something. */
+.btn-danger-solid{background:var(--danger);color:#fff;border-color:var(--danger)}
+.btn-danger-solid:hover{filter:brightness(1.07)}
+
+/* ── Password reveal ───────────────────────────────────────── */
+.pw-field{position:relative}
+/* Room for the button, so long passwords never run under it. */
+.pw-field .input{padding-right:42px}
+.pw-eye{
+  position:absolute;right:1px;top:1px;bottom:1px;width:40px;
+  display:grid;place-items:center;
+  background:none;border:0;cursor:pointer;color:var(--txt-mute);
+  border-radius:0 8px 8px 0;transition:color .15s;
+}
+.pw-eye:hover{color:var(--copper)}
+.pw-eye:focus-visible{outline:2px solid var(--copper);outline-offset:-2px;color:var(--copper)}
+.pw-eye svg{width:17px;height:17px;stroke:currentColor;fill:none;stroke-width:1.8;
+  stroke-linecap:round;stroke-linejoin:round}

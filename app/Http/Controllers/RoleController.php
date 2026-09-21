@@ -69,7 +69,7 @@ class RoleController extends Controller
         return [
             'id'        => $r->id,
             'name'      => $r->name,
-            'perms'     => $r->perms,
+            'perms'     => $r->wirePerms(),   /* Super Admin reads as full, never a stale map */
             'createdAt' => $r->created_at?->toIso8601String(),
             'createdBy' => $r->created_by,
         ];

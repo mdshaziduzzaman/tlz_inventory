@@ -10,6 +10,7 @@ use App\Http\Controllers\ProductController;
 use App\Http\Controllers\ReturnController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\SaleController;
+use App\Http\Controllers\SettingController;
 use App\Http\Controllers\SizeController;
 use App\Http\Controllers\UserController;
 use Illuminate\Support\Facades\Route;
@@ -79,6 +80,10 @@ Route::prefix('api')->group(function () {
             Route::post('roles', [RoleController::class, 'store']);
             Route::put('roles/{role}', [RoleController::class, 'update']);
             Route::delete('roles/{role}', [RoleController::class, 'destroy']);
+        });
+
+        Route::middleware('module:settings')->group(function () {
+            Route::post('settings', [SettingController::class, 'update']);
         });
 
         /* Wiping the data is Super Admin only — the module middleware cannot

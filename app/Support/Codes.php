@@ -16,9 +16,16 @@ use Illuminate\Support\Facades\DB;
 class Codes
 {
     /** Reserve `$count` consecutive numbers and return the first one. */
-    public static function bump(string $key, int $count = 1): int
+    /**
+     * `$startAt` is where a *missing* counter begins — ignored once the row
+     * exists. Sequences whose rows outlive the counter (users, customers)
+     * pass their table's current high-water mark, so a counter that is lost
+     * to a wipe or a restore picks up where the data actually is instead of
+     * handing out codes that already exist.
+     */
+    public static function bump(string $key, int $count = 1, int $startAt = 0): int
     {
-        DB::table('counters')->insertOrIgnore(['key' => $key, 'value' => 0]);
+        DB::table('counters')->insertOrIgnore(['key' => $key, 'value' => $startAt]);
 
         $current = (int) DB::table('counters')
             ->where('key', $key)
@@ -45,6 +52,17 @@ class Codes
     public static function barcode(string $dateKey, int $n): string
     {
         return $dateKey . str_pad((string) $n, 4, '0', STR_PAD_LEFT);
+    }
+
+    /**
+     * The highest number already issued in a `PREFIX-0001` style column —
+     * what a lost counter should resume from.
+     */
+    public static function highest(string $table, string $column, string $prefix): int
+    {
+        return (int) DB::table($table)
+            ->where($column, 'like', $prefix . '%')
+            ->max(DB::raw('CAST(SUBSTRING(`' . $column . '`, ' . (strlen($prefix) + 1) . ') AS UNSIGNED)'));
     }
 
     public static function pad(int $n, int $width): string
